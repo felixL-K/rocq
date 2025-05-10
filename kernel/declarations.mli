@@ -193,6 +193,7 @@ type one_inductive_body = {
         As such it contains the parameters.
         (not necessarily a syntactic arity, eg [relation A] instead of [A -> A -> Prop]) *)
 
+    (* i index of the mutual, j index of the constructor *)
     mind_consnames : Id.t array; (** Names of the constructors: [cij] *)
 
     mind_user_lc : types array;
@@ -213,6 +214,7 @@ type one_inductive_body = {
     mind_squashed : squash_info option;
     (** Is elimination restricted to the inductive's sort? *)
 
+    (* rel_context ex : constructors S and zero for nat *)  
     mind_nf_lc : (rel_context * types) array;
  (** Head normalized constructor types so that their conclusion
      exposes the inductive type. It includes the parameters, i.e. each
