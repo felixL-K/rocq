@@ -64,7 +64,7 @@ type scheme_object_function =
    User-defined inductive types and their associated schemes are not added to this table. *)
 let scheme_object_table =
   (Hashtbl.create 17 :
-     ((string list * UnivGen.QualityOrSet.t option * bool), (one_inductive_body option -> string) * scheme_object_function)
+     (Key.t, (one_inductive_body option -> string) * scheme_object_function)
   Hashtbl.t)
 
 let key_str key =
@@ -103,9 +103,9 @@ let is_declared_scheme_object key =
   (* let tmp = String.split_on_char '_' key in *)
   Hashtbl.mem scheme_object_table key
 
-let scheme_kind_name (key : _ scheme_kind) : string list * UnivGen.QualityOrSet.t option * bool = key
+let scheme_kind_name (key : _ scheme_kind) : Key.t = key
 
-let scheme_key (key : string list * UnivGen.QualityOrSet.t option * bool) : _ scheme_kind  = key
+let scheme_key (key : Key.t) : _ scheme_kind  = key
 
 let get_suff sch_type sch_sort =
   try

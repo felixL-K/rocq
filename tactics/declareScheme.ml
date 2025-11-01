@@ -12,7 +12,9 @@ open Names
 
 module Key = struct
 
-  type t = (string list * UnivGen.QualityOrSet.t option * bool)
+  type is_mutual = bool
+
+  type t = (string list * UnivGen.QualityOrSet.t option * is_mutual)
 
   let compare (a : t) (b : t) =
     let a1, a2, a3 = a and b1, b2, b3 = b in
@@ -53,7 +55,7 @@ let subst_one_scheme subst (ind,const) =
 let subst_scheme (subst,(kind,l)) =
   (kind, subst_one_scheme subst l)
 
-let inScheme : Libobject.locality * ((string list * UnivGen.QualityOrSet.t option * bool) * (inductive * Constant.t)) -> Libobject.obj =
+let inScheme : Libobject.locality * (Key.t * (inductive * Constant.t)) -> Libobject.obj =
   let open Libobject in
   declare_object @@ object_with_locality "SCHEME"
     ~cache:cache_scheme

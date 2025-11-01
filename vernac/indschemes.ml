@@ -281,7 +281,8 @@ let name_and_process_scheme env = function
     let newref = CAst.make newid in
     (newref,sch_type, ind, sch_sort)
 
-let do_mutual_scheme ~register ?(force_mutual=false) env l =
+let do_scheme ~register ?(force_mutual=false) env l =
+  let l = List.map (name_and_process_scheme env) l in
   match l with
   (* if calling with one inductiv try define individual scheme *)
   | ({CAst.v},kind,(mutind,i as ind),sort)::[] ->
@@ -296,10 +297,6 @@ let do_mutual_scheme ~register ?(force_mutual=false) env l =
       define_mutual_scheme (scheme_key (kind,sort,true)) lnames linds
     with Not_found -> CErrors.user_err Pp.(str "Mutually defined schemes should be recursive."))
   | _ -> (failwith "do_mutual_scheme expects a non empty list of inductive types.")
-
-let do_scheme ~register env l =
-  let lnamedepindsort = List.map (name_and_process_scheme env) l in
-  do_mutual_scheme ~register env lnamedepindsort
 
 (* TODO : redifine do_mutual_induction_scheme using do_mutual_scheme *)
 let _do_mutual_induction_scheme ~register ?(force_mutual=false) env ?(isrec=true) l =
