@@ -299,7 +299,7 @@ let do_scheme ~register ?(force_mutual=false) env l =
   | _ -> (failwith "do_mutual_scheme expects a non empty list of inductive types.")
 
 (* TODO : redifine do_mutual_induction_scheme using do_mutual_scheme *)
-let _do_mutual_induction_scheme ~register ?(force_mutual=false) env ?(isrec=true) l =
+let do_mutual_induction_scheme ~register ?(force_mutual=false) env ?(isrec=true) l =
   let sigma, inst =
     let _,_,ind,_ = match l with | x::_ -> x | [] -> assert false in
     let _, ctx = Typeops.type_of_global_in_context env (Names.GlobRef.IndRef ind) in

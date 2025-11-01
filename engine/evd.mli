@@ -386,7 +386,7 @@ val dependent_evar_ident : Evar.t -> evar_map -> Id.t
 
 (** {5 Side-effects} *)
 
-(* inductive * (scheme_name * sort * mutual *)
+(* inductive * (scheme_name * sort * is_mutual *)
 type side_effect_role =
 | Schema of inductive * (string list * UnivGen.QualityOrSet.t option * bool)
 

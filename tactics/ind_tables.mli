@@ -18,11 +18,15 @@ open Constr
 
 type mutual
 type individual
-type 'a scheme_kind
+
+module Key = DeclareScheme.Key
+
+(* scheme_name * sort * is_mutual *)
+type 'a scheme_kind = Key.t
 
 type handle
 
-(* Dependency of a scheme on another scheme: (inductive, kind, internal) *)
+(* dependency: (inductive, kind, is_internal) *)
 type scheme_dependency =
 | SchemeMutualDep of Names.MutInd.t * mutual scheme_kind * bool
 | SchemeIndividualDep of inductive * individual scheme_kind * bool
@@ -58,13 +62,13 @@ val declare_individual_scheme_object : string list * UnivGen.QualityOrSet.t opti
   individual_scheme_object_function ->
   individual scheme_kind
 
-val is_declared_scheme_object : string list * UnivGen.QualityOrSet.t option * bool -> bool
+val is_declared_scheme_object : Key.t -> bool
 (** Is the string used as the name of a [scheme_kind]? *)
 
-val scheme_kind_name : _ scheme_kind -> string list * UnivGen.QualityOrSet.t option * bool
+val scheme_kind_name : _ scheme_kind -> Key.t
 (** Name of a [scheme_kind]. Can be used to register with DeclareScheme. *)
 
-val scheme_key : string list * UnivGen.QualityOrSet.t option * bool -> _ scheme_kind
+val scheme_key : Key.t -> _ scheme_kind
 
 val get_suff : string list -> UnivGen.QualityOrSet.t option -> Declarations.one_inductive_body option -> string
   

@@ -1601,7 +1601,7 @@ let eq_dec_scheme_kind =
     try_declare_scheme (eq_dec_scheme_msg (List.hd kn)) (prepare_f_handle make_eq_decidability handle) env kn)
   
 (* The eq_dec_scheme proofs depend on the equality and discr tactics
- but the inj tactics, that comes with discr, depends on the
- eq_dec_scheme... *)
+   but the inj tactics, that comes with discr, depends on the
+   eq_dec_scheme... *)
 
 let _ = Equality.set_eq_dec_scheme_kind eq_dec_scheme_kind

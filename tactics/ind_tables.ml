@@ -20,8 +20,6 @@ open Declarations
 open Constr
 open Util
 
-module Key = DeclareScheme.Key
-
 (**********************************************************************)
 (* Registering schemes in the environment *)
 
@@ -33,7 +31,9 @@ type mutual_scheme_object_function =
 type individual_scheme_object_function =
   Environ.env -> handle -> inductive -> bool -> constr Evd.in_ustate option
 
-(* scheme_name * sort * dep *)
+module Key = DeclareScheme.Key
+
+(* scheme_name * sort * is_mutual *)
 type 'a scheme_kind = Key.t
 
 let pr_scheme_kind (kind : Key.t) =
@@ -60,8 +60,6 @@ type scheme_object_function =
   | MutualSchemeFunction of mutual_scheme_object_function * (Environ.env -> Names.MutInd.t -> bool -> scheme_dependency list) option
   | IndividualSchemeFunction of individual_scheme_object_function * (Environ.env -> inductive -> bool -> scheme_dependency list) option
 
-(* Stores only the schemes initialized at the launch of coqtop (or similar tools).
-   User-defined inductive types and their associated schemes are not added to this table. *)
 let scheme_object_table =
   (Hashtbl.create 17 :
      (Key.t, (one_inductive_body option -> string) * scheme_object_function)
@@ -99,9 +97,7 @@ let declare_individual_scheme_object key suff ?deps f =
   let key = (strl,sortf,false) in
   declare_scheme_object key suff (IndividualSchemeFunction (f, deps))
 
-let is_declared_scheme_object key =
-  (* let tmp = String.split_on_char '_' key in *)
-  Hashtbl.mem scheme_object_table key
+let is_declared_scheme_object key = Hashtbl.mem scheme_object_table key
 
 let scheme_kind_name (key : _ scheme_kind) : Key.t = key
 
@@ -317,14 +313,14 @@ match sd with
   else
     begin match define_individual_scheme kind ~internal:intern None ind eff with
       | None -> None
-      | Some (_, eff') -> Some eff' (* Some (Evd.concat_side_effects eff' eff) *)
+      | Some (_, eff') -> Some eff'
     end
 | SchemeMutualDep (ind, kind, intern) ->
   if local_check_scheme kind (ind,0) eff then Some eff
   else
     begin match define_mutual_scheme kind ~internal:intern [] [(ind,0)] eff with
       | None -> None
-      | Some (_, eff') -> Some eff' (* Some (Evd.concat_side_effects eff' eff) *)
+      | Some (_, eff') -> Some eff'
     end
 
 let find_scheme kind (mind,i as ind) =
@@ -392,4 +388,3 @@ let define_mutual_scheme ?locmap ?(intern=false) kind names inds =
        let () = globally_declare_schemes eff in
        let () = register_schemes eff in
        redeclare_schemes eff
-(* ATTENTION j ai pas comprit si mtn c est just eff et pas _, eff *)

@@ -440,7 +440,7 @@ type evar_flags =
     rewrite_rule_evars : Evar.Set.t;
   }
 
-(* inductive * (scheme_name * sort * mutual *)
+(* inductive * (scheme_name * sort * is_mutual *)
 type side_effect_role =
 | Schema of inductive * (string list * UnivGen.QualityOrSet.t option * bool)
 

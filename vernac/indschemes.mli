@@ -42,7 +42,7 @@ val declare_rewriting_schemes : ?loc:Loc.t -> inductive -> unit
 val do_scheme : register:bool -> ?force_mutual:bool
   -> Environ.env -> (Names.Id.t CAst.t option * Vernacexpr.scheme) list -> unit
 
-val _do_mutual_induction_scheme : register:bool -> ?force_mutual:bool
+val do_mutual_induction_scheme : register:bool -> ?force_mutual:bool
   -> Environ.env -> ?isrec:bool ->
   (Names.Id.t CAst.t * Indrec.dep_flag * Names.inductive * UnivGen.QualityOrSet.t) list -> unit
 
