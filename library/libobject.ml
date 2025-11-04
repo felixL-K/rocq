@@ -168,7 +168,7 @@ let declare_object_gen odecl =
   tag
 
 let make_oname { obj_path; obj_mp } id =
-  Libnames.add_path_suffix obj_path id, Names.KerName.make obj_mp (Names.Label.of_id id)
+  Libnames.add_path_suffix obj_path id, Names.KerName.make obj_mp id
 
 let declare_named_object_full odecl =
   let odecl =
@@ -245,6 +245,10 @@ let rebuild_object (Discharged (tag, v, rebuild)) =
 let object_stage (Dyn.Dyn (tag, v)) =
   let O decl = DynMap.find tag !cache_tab in
   decl.object_stage
+
+let object_name (Dyn.Dyn (tag, v)) =
+  let O decl = DynMap.find tag !cache_tab in
+  decl.object_name
 
 let dump = Dyn.dump
 

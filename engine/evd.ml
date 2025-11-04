@@ -23,6 +23,8 @@ type econstr = constr
 type etypes = types
 type esorts = Sorts.t
 type erelevance = Sorts.relevance
+type einstance = UVars.Instance.t
+type 'a puniverses = 'a * einstance
 
 (** Generic filters *)
 module Filter :
@@ -435,16 +437,18 @@ type evar_flags =
     aliased_evars : Evar.t Evar.Map.t;
     typeclass_evars : Evar.Set.t;
     impossible_case_evars : Evar.Set.t;
+    rewrite_rule_evars : Evar.Set.t;
   }
 
-(* inductive * (scheme_name * sort * mutual *)
+(* inductive * (scheme_name * sort * is_mutual *)
 type side_effect_role =
 | Schema of inductive * (string list * UnivGen.QualityOrSet.t option * bool)
 
 (* Schemes already defined but not yet in the global env *)
 type side_effects = {
   seff_private : Safe_typing.private_constants;
-  seff_roles : side_effect_role Cmap.t;
+  seff_roles : side_effect_role Cmap_env.t;
+  seff_univs : UState.named_universes_entry Cmap_env.t;
 }
 
 module FutureGoals : sig
@@ -660,7 +664,7 @@ let expand_existential0 = expand_existential
 let rename evk id evd =
   { evd with evar_names = EvNames.rename evk id evd.evar_names }
 
-let add_with_name (type a) ?name ~typeclass_candidate d e (i : a evar_info) = match i.evar_body with
+let add_with_name (type a) ?name ~typeclass_candidate ~rrpat d e (i : a evar_info) = match i.evar_body with
 | Evar_empty ->
   let evar_names = EvNames.add_name_undefined name e i d.evar_names in
   let evar_flags =
@@ -668,6 +672,11 @@ let add_with_name (type a) ?name ~typeclass_candidate d e (i : a evar_info) = ma
       let flags = d.evar_flags in
       { flags with typeclass_evars = Evar.Set.add e flags.typeclass_evars }
     else d.evar_flags
+  in
+  let evar_flags =
+    if rrpat then
+      { evar_flags with rewrite_rule_evars = Evar.Set.add e evar_flags.rewrite_rule_evars }
+    else evar_flags
   in
   let evar_flags = match i.evar_source with
     | _, ImpossibleCase ->
@@ -685,7 +694,7 @@ let add_with_name (type a) ?name ~typeclass_candidate d e (i : a evar_info) = ma
 
 (** Evd.add is a low-level function mainly used to update the evar_info
     associated to an evar, so we prevent registering its typeclass status. *)
-let add d e i = add_with_name ~typeclass_candidate:false d e i
+let add d e i = add_with_name ~typeclass_candidate:false ~rrpat:false d e i
 
 (*** Evar flags: typeclasses, aliased or obligation flag *)
 
@@ -713,9 +722,17 @@ let is_obligation_evar evd evk =
 
 let get_impossible_case_evars evd = evd.evar_flags.impossible_case_evars
 
+let get_rewrite_rule_evars evd = evd.evar_flags.rewrite_rule_evars
+
+let is_rewrite_rule_evar evd evk =
+  let flags = evd.evar_flags in
+  Evar.Set.mem evk flags.rewrite_rule_evars
+
 (** Inheritance of flags: for evar-evar and restriction cases *)
 
 let inherit_evar_flags evar_flags evk evk' =
+  if Evar.Set.mem evk evar_flags.rewrite_rule_evars then
+    CErrors.anomaly Pp.(str "Tried to define or restrict a rewrite rule evar.");
   let evk_typeclass = Evar.Set.mem evk evar_flags.typeclass_evars in
   let evk_obligation = Evar.Set.mem evk evar_flags.obligation_evars in
   let evk_impossible = Evar.Set.mem evk evar_flags.impossible_case_evars in
@@ -738,16 +755,21 @@ let inherit_evar_flags evar_flags evk evk' =
       Evar.Set.add evk' impossible_case_evars
     else evar_flags.impossible_case_evars
   in
-  { obligation_evars; aliased_evars; typeclass_evars; impossible_case_evars; }
+  let rewrite_rule_evars = evar_flags.rewrite_rule_evars in
+  { obligation_evars; aliased_evars; typeclass_evars; impossible_case_evars; rewrite_rule_evars }
 
 (** Removal: in all other cases of definition *)
 
 let remove_evar_flags evk evar_flags =
+  if Evar.Set.mem evk evar_flags.rewrite_rule_evars then
+    CErrors.anomaly Pp.(str "Tried to define or restrict a rewrite rule evar.");
   { typeclass_evars = Evar.Set.remove evk evar_flags.typeclass_evars;
     obligation_evars = Evar.Set.remove evk evar_flags.obligation_evars;
     impossible_case_evars = Evar.Set.remove evk evar_flags.impossible_case_evars;
     (* Aliasing information is kept. *)
     aliased_evars = evar_flags.aliased_evars;
+    (* Cannot be a rewrite rule evar *)
+    rewrite_rule_evars = evar_flags.rewrite_rule_evars
   }
 
 (** New evars *)
@@ -850,13 +872,14 @@ let is_relevance_irrelevant sigma r =
 
 let evar_handler sigma =
   let evar_expand ev = existential_expand_value0 sigma ev in
+  let qnorm q = UState.nf_qvar sigma.universes q in
   let qvar_irrelevant q = is_relevance_irrelevant sigma (Sorts.RelevanceVar q) in
   let evar_irrelevant (evk, _) = match find sigma evk with
   | EvarInfo evi -> is_relevance_irrelevant sigma evi.evar_relevance
   | exception Not_found -> false (* Should be an anomaly *)
   in
   let evar_repack ev = mkLEvar sigma ev in
-  { CClosure.evar_expand; evar_irrelevant; evar_repack; qvar_irrelevant }
+  { CClosure.evar_expand; evar_irrelevant; evar_repack; qnorm; qvar_irrelevant }
 
 let existential_type_opt d (n, args) =
   match find_undefined d n with
@@ -900,11 +923,13 @@ let empty_evar_flags =
     aliased_evars = Evar.Map.empty;
     typeclass_evars = Evar.Set.empty;
     impossible_case_evars = Evar.Set.empty;
+    rewrite_rule_evars = Evar.Set.empty;
   }
 
 let empty_side_effects = {
   seff_private = Safe_typing.empty_private_constants;
-  seff_roles = Cmap.empty;
+  seff_roles = Cmap_env.empty;
+  seff_univs = Cmap_env.empty;
 }
 
 let empty = {
@@ -1033,6 +1058,8 @@ let univ_flexible = UnivFlexible false
 let univ_flexible_alg = UnivFlexible true
 
 let ustate d = d.universes
+
+let elim_graph d = UState.elim_graph d.universes
 
 let evar_universe_context d = ustate d
 
@@ -1179,29 +1206,38 @@ let set_leq_sort evd s1 s2 =
   match is_eq_sort s1 s2 with
   | None -> evd
   | Some (u1, u2) ->
-    if not (UGraph.type_in_type (UState.ugraph evd.universes)) then
-       add_universe_constraints evd (UnivProblem.Set.singleton (UnivProblem.ULe (u1,u2)))
+     if not (UGraph.type_in_type (UState.ugraph evd.universes)) then
+       add_universe_constraints evd @@
+         UnivProblem.Set.singleton (UnivProblem.ULe (u1,u2))
      else evd
 
 let set_eq_qualities evd q1 q2 =
-  add_universe_constraints evd (UnivProblem.Set.singleton (QEq (q1, q2)))
+  add_universe_constraints evd @@ UnivProblem.Set.singleton (QEq (q1, q2))
 
 let set_above_prop evd q =
-  add_universe_constraints evd (UnivProblem.Set.singleton (QLeq (Sorts.Quality.qprop, q)))
+  add_universe_constraints evd @@
+    UnivProblem.Set.singleton (QLeq (Sorts.Quality.qprop, q))
 
 let check_eq evd s s' =
+  let quals = elim_graph evd in
   let ustate = evd.universes in
-  UGraph.check_eq_sort (UState.ugraph ustate) (UState.nf_sort ustate s) (UState.nf_sort ustate s')
+  let univs = UState.ugraph ustate in
+  UGraph.check_eq_sort quals univs (UState.nf_sort ustate s) (UState.nf_sort ustate s')
 
 let check_leq evd s s' =
+  let quals = elim_graph evd in
   let ustate = evd.universes in
-  UGraph.check_leq_sort (UState.ugraph ustate) (UState.nf_sort ustate s) (UState.nf_sort ustate s')
+  let univs = UState.ugraph ustate in
+  UGraph.check_leq_sort quals univs (UState.nf_sort ustate s) (UState.nf_sort ustate s')
 
 let check_constraints evd csts =
   UGraph.check_constraints csts (UState.ugraph evd.universes)
 
 let check_qconstraints evd csts =
   UState.check_qconstraints evd.universes csts
+
+let check_elim_constraints evd csts =
+  UState.check_elim_constraints evd.universes csts
 
 let check_quconstraints evd (qcsts,ucsts) =
   check_qconstraints evd qcsts && check_constraints evd ucsts
@@ -1247,7 +1283,8 @@ exception UniversesDiffer = UState.UniversesDiffer
 let emit_side_effects eff evd =
   let effects = {
   seff_private = Safe_typing.concat_private eff.seff_private evd.effects.seff_private;
-  seff_roles = Cmap.fold Cmap.add eff.seff_roles evd.effects.seff_roles;
+  seff_roles = Cmap_env.fold Cmap_env.add eff.seff_roles evd.effects.seff_roles;
+  seff_univs = Cmap_env.fold Cmap_env.add eff.seff_univs evd.effects.seff_univs;
   } in
   { evd with effects; universes = UState.emit_side_effects eff.seff_private evd.universes }
 
@@ -1255,6 +1292,30 @@ let drop_side_effects evd =
   { evd with effects = empty_side_effects; }
 
 let eval_side_effects evd = evd.effects
+
+let push_side_effects prv ?univs ?role effs =
+  let kn = match Safe_typing.constants_of_private prv with
+  | [cst] -> cst
+  | _ -> assert false
+  in
+  let seff_univs = match univs with
+  | None -> effs.seff_univs
+  | Some ctx -> Cmap_env.add kn ctx effs.seff_univs
+  in
+  let seff_roles = match role with
+  | None -> effs.seff_roles
+  | Some r -> Cmap_env.add kn r effs.seff_roles
+  in
+  let seff_private = Safe_typing.concat_private prv effs.seff_private in
+  {
+    seff_private = Safe_typing.concat_private prv seff_private;
+    seff_roles = seff_roles;
+    seff_univs = seff_univs;
+  }
+
+let seff_private eff = eff.seff_private
+let seff_roles effs = effs.seff_roles
+let seff_univs effs = effs.seff_univs
 
 (* Future goals *)
 let declare_future_goal evk evd =
@@ -1314,7 +1375,7 @@ let pr_shelf evd =
 
 let new_pure_evar ?(src=default_source) ?(filter = Filter.identity) ~relevance
   ?(abstract_arguments = Abstraction.identity) ?candidates
-  ?name ?(typeclass_candidate = false) sign evd typ =
+  ?name ?(typeclass_candidate = false) ?(rrpat = false) sign evd typ =
   let evi = {
     evar_hyps = sign;
     evar_concl = Undefined typ;
@@ -1327,7 +1388,7 @@ let new_pure_evar ?(src=default_source) ?(filter = Filter.identity) ~relevance
   }
   in
   let newevk = new_untyped_evar () in
-  let evd = add_with_name evd ?name ~typeclass_candidate newevk evi in
+  let evd = add_with_name evd ?name ~typeclass_candidate ~rrpat newevk evi in
   let evd = declare_future_goal newevk evd in
   (evd, newevk)
 

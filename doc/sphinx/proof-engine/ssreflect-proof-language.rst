@@ -16,19 +16,19 @@ proof methodology. Despite the original purpose, this set of tactics is
 of general interest and is available in Rocq starting from version 8.7.
 
 |SSR| was developed independently of the tactics described in
-Chapter :ref:`tactics`. Indeed the scope of the tactics part of |SSR| largely
+:ref:`tactics`. Indeed the scope of the tactics part of |SSR| largely
 overlaps with the standard set of tactics. Eventually the overlap will
 be reduced in future releases of Rocq.
 
 Proofs written in |SSR| typically look quite different from the
-ones written using only tactics as per Chapter :ref:`tactics`. We try to
+ones written using only tactics described in :ref:`tactics`. We try to
 summarise here the most “visible” ones in order to help the reader
-already accustomed to the tactics described in Chapter :ref:`tactics` to read
+already accustomed to the tactics in :ref:`tactics` to read
 this chapter.
 
 The first difference between the tactics described in this chapter and the
-tactics described in Chapter :ref:`tactics` is the way hypotheses are managed
-(we call this *bookkeeping*). In Chapter :ref:`tactics` the most common
+tactics described in :ref:`tactics` is the way hypotheses are managed
+(we call this *bookkeeping*). In :ref:`tactics` the most common
 approach is to avoid moving explicitly hypotheses back and forth between the
 context and the conclusion of the goal. On the contrary, in |SSR| all
 bookkeeping is performed on the conclusion of the goal, using for that
@@ -39,16 +39,16 @@ conclusion to the context, and ``in`` moves back and forth a hypothesis from the
 context to the conclusion for the time of applying an action to it.
 
 While naming hypotheses is commonly done by means of an ``as`` clause in the
-basic model of Chapter :ref:`tactics`, it is here to ``=>`` that this task is
+basic model of :ref:`tactics`, it is here to ``=>`` that this task is
 devoted. Tactics frequently leave new assumptions in the conclusion, and are
 often followed by ``=>`` to explicitly name them. While generalizing the
-goal is normally not explicitly needed in Chapter :ref:`tactics`, it is an
+goal is normally not explicitly needed in :ref:`tactics`, it is an
 explicit operation performed by ``:``.
 
 .. seealso:: :ref:`bookkeeping_ssr`
 
 Besides the difference of bookkeeping model, this chapter includes
-specific tactics that have no explicit counterpart in Chapter :ref:`tactics`
+specific tactics that have no explicit counterpart in :ref:`tactics`
 such as tactics to mix forward steps and generalizations as
 :tacn:`generally have` or :tacn:`without loss`.
 
@@ -196,7 +196,7 @@ The |SSR| extension provides the following construct for
 irrefutable pattern matching, that is, destructuring assignment:
 
 .. prodn::
-   term += let: @pattern := @term in @term
+   term += let: @pattern := @term in @term__body
 
 Note the colon ``:`` after the ``let`` keyword, which avoids any ambiguity
 with a function definition or Coq’s basic destructuring let. The ``let:``
@@ -237,21 +237,19 @@ construct differs from the latter as follows.
 
 
 The ``let:`` construct is just (more legible) notation for the primitive
-Gallina expression :n:`match @term with @pattern => @term end`.
+Gallina expression :n:`match @term with @pattern => @term__body end`.
 
 The |SSR| destructuring assignment supports all the dependent
 match annotations; the full syntax is
 
 .. prodn::
-   term += let: @pattern {? as @ident} {? in @pattern} := @term {? return @term} in @term
+   term += let: @pattern {? as @ident} {? in @pattern__ind} := @term {? return @term__ret} in @term__body
 
-where the second :token:`pattern` and the second :token:`term` are *types*.
-
-When the ``as`` and ``return`` keywords are both present, then :token:`ident` is bound
-in both the second :token:`pattern` and the second :token:`term`; variables
-in the optional type :token:`pattern` are bound only in the second term, and
-other variables in the first  :token:`pattern` are bound only in the third
-:token:`term`, however.
+This dependent ``let:`` construct is just notation for
+:n:`match @term {? as @ident } {? in @pattern__ind } {? return @term__ret } with @pattern {? as @ident } => @term__body end`.
+In particular, :n:`@ident` is used both for
+dependent pattern matching and for aliasing the pattern (see
+:ref:`aliasing-subpatterns`).
 
 
 .. _pattern_conditional_ssr:
@@ -263,7 +261,7 @@ The following construct can be used for a refutable pattern matching,
 that is, pattern testing:
 
 .. prodn::
-   term += if @term is @pattern then @term else @term
+   term += if @term is @pattern then @term__then else @term__else
 
 Although this construct is not strictly ML (it does exist in variants
 such as the pattern calculus or the ρ-calculus), it turns out to be
@@ -298,7 +296,7 @@ setting of Gallina, which lacks a ``Match_Failure`` exception.
 
 Like ``let:`` above, the ``if…is`` construct is just (more legible) notation
 for the primitive Gallina expression
-:n:`match @term with @pattern => @term | _ => @term end`.
+:n:`match @term with @pattern => @term__then | _ => @term__else end`.
 
 Similarly, it will always be displayed as the expansion of this form
 in terms of primitive match expressions (where the default expression
@@ -334,21 +332,21 @@ construct supports
 the dependent match annotations:
 
 .. prodn::
-   term += if @term is @pattern as @ident in @pattern return @term then @term else @term
+   term += if @term is @pattern as @ident in @pattern__ind return @term__ret then @term__then else @term__else
 
-As in ``let:``, the variable :token:`ident` (and those in the type pattern)
-are bound in the second :token:`term`; :token:`ident` is also bound in the
-third :token:`term` (but not in the fourth :token:`term`), while the
-variables in the first :token:`pattern` are bound only in the third
-:token:`term`.
+This dependent ``if-is-then-else`` construct is just notation for
+:n:`match @term as @ident in @pattern__ind return @term__ret with @pattern as @ident => @term__then | _ => @term__else end`.
+In particular, :n:`@ident` is
+used both for dependent pattern matching and for aliasing the pattern (see
+:ref:`aliasing-subpatterns`).
 
 Another variant allows to treat the ``else`` case first:
 
 .. prodn::
-   term += if @term isn't @pattern then @term else @term
+   term += if @term isn't @pattern then @term__then else @term__else
 
-Note that :token:`pattern` eventually binds variables in the third
-:token:`term` and not in the second :token:`term`.
+Note that :token:`pattern` binds variables in
+:n:`@term__else` and not in :n:`@term__then`.
 
 .. _parametric_polymorphism_ssr:
 
@@ -600,7 +598,7 @@ resemble ML-like definitions of polymorphic functions.
 Abbreviations
 ~~~~~~~~~~~~~
 
-.. tacn:: set @ident {? : @term } := {? @occ_switch } @term
+.. tacn:: set @ident {? : @type } := {? @occ_switch } @term
    :name: set (ssreflect)
 
    The |SSR| ``set`` tactic performs abbreviations; it introduces a
@@ -622,20 +620,14 @@ Abbreviations
 where:
 
 + :token:`ident` is a fresh identifier chosen by the user.
-+ :token:`term` 1 is an optional type annotation. The type annotation :token:`term` 1
-  can be given in open syntax (no surrounding parentheses). If no
-  :token:`occ_switch` (described hereafter) is present,
-  it is also the case for the second :token:`term`.
-  On the other hand, in the presence of :token:`occ_switch`, parentheses
-  surrounding the second :token:`term` are mandatory.
++ :token:`type` is an optional type annotation. If :token:`occ_switch`
+  is present, then :token:`term` must be surrounded by parentheses.
 + In the occurrence switch :token:`occ_switch`, if the first element of the
   list is a natural, this element should be a number, and not an Ltac
   variable. The empty list ``{}`` is not interpreted as a valid occurrence
   switch; it is rather used as a flag to signal the intent of the user to
   clear the name following it (see :ref:`ssr_rewrite_occ_switch` and
   :ref:`introduction_ssr`).
-
-The tactic:
 
 .. example::
 
@@ -660,14 +652,11 @@ The tactic:
 The type annotation may contain wildcards, which will be filled
 with appropriate values by the matching process.
 
-The tactic first tries to find a subterm of the goal matching
-the second :token:`term`
-(and its type), and stops at the first subterm it finds. Then
-the occurrences of this subterm selected by the optional :token:`occ_switch`
-are replaced by :token:`ident` and a definition :n:`@ident := @term`
-is added to the
-context. If no :token:`occ_switch` is present, then all the occurrences are
-abstracted.
+The tactic finds the first subterm of the goal that matches :token:`term`
+(and its type), then selects occurrences of this subterm, replaces them
+with :token:`ident` and adds a definition :n:`@ident := @term` to the
+context. :token:`occ_switch` selects which occurrences to replace. If
+:token:`occ_switch` is not specified, all occurrences are replaced.
 
 
 Matching
@@ -3926,8 +3915,8 @@ Notes:
       Notation "\sum_ ( m <= i < n | P ) F" :=
         (\big[plus/O]_(m <= i < n | P%bool) F%nat).
 
-      Notation eq_bigr := (fun n m => eq_bigr_ 0 plus (index_iota n m)).
-      Notation eq_big := (fun n m => eq_big_ 0 plus (index_iota n m)).
+      Abbreviation eq_bigr := (fun n m => eq_bigr_ 0 plus (index_iota n m)).
+      Abbreviation eq_big := (fun n m => eq_big_ 0 plus (index_iota n m)).
 
       Parameter odd : nat -> bool.
       Parameter prime : nat -> bool.
@@ -4425,7 +4414,7 @@ Contextual patterns in rewrite
 
   .. rocqtop:: all
 
-     Notation "n .+1" := (Datatypes.S n) (at level 2, left associativity,
+     Notation "n .+1" := (Datatypes.S n) (at level 1, left associativity,
                           format "n .+1") : nat_scope.
 
      Axiom addSn : forall m n, m.+1 + n = (m + n).+1.
@@ -4498,8 +4487,8 @@ The following example is taken from ``ssreflect.v``, where the
 
 .. rocqdoc::
 
-   Notation RHS := (X in _ = X)%pattern.
-   Notation LHS := (X in X = _)%pattern.
+   Abbreviation RHS := (X in _ = X)%pattern.
+   Abbreviation LHS := (X in X = _)%pattern.
 
 Shortcuts defined this way can be freely used in place of the trailing
 ``ident in term`` part of any contextual pattern. Some examples follow:
@@ -5775,17 +5764,6 @@ Commands
 .. cmd:: Prenex Implicits {+ @ident }
 
    prenex implicits declaration (see :ref:`parametric_polymorphism_ssr`)
-
-Settings
-~~~~~~~~
-
-.. flag:: Debug Ssreflect
-
-   *Developer only.* Print debug information on reflect.
-
-.. flag:: Debug SsrMatching
-
-   *Developer only.* Print debug information on SSR matching.
 
 .. rubric:: Footnotes
 

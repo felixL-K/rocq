@@ -23,12 +23,9 @@ module GramState = Store.Make ()
 
 type grammar_entry =
 | GramExt of GrammarCommand.t
-| EntryExt : 'a EntryCommand.tag * string -> grammar_entry
+| EntryExt : ('a * 'b) EntryCommand.tag * 'a -> grammar_entry
 
 (** State handling (non marshallable!) *)
-
-module EntryData = struct type _ t = Ex : 'a Entry.t String.Map.t -> 'a t end
-module EntryDataMap = EntryCommand.Map(EntryData)
 
 type full_state = {
   (* the state used for parsing *)
@@ -41,22 +38,25 @@ type full_state = {
   current_sync_extensions : grammar_entry list;
   (* some user data tied to the grammar state, typically contains info on declared levels *)
   user_state : GramState.t;
-  (* map to find custom entries *)
-  custom_entries : EntryDataMap.t;
 }
 
 let empty_full_state =
-  let empty_gstate = { GState.estate = EState.empty; kwstate = CLexer.empty_keyword_state } in
+  let empty_gstate = { GState.estate = EState.empty; kwstate = CLexer.empty_keyword_state; recover = true; has_non_assoc = false } in
   {
     current_state = empty_gstate;
     base_state = empty_gstate;
     current_sync_extensions = [];
     user_state = GramState.empty;
-    custom_entries = EntryDataMap.empty;
   }
+
+let assert_synterp () =
+  if !Flags.in_synterp_phase = Some false then
+    CErrors.anomaly Pp.(str "The grammar cannot be modified during the interp phase.")
 
 (** Not marshallable! *)
 let state = ref empty_full_state
+
+let gramstate () = (!state).user_state
 
 let gstate () = (!state).current_state
 
@@ -69,7 +69,6 @@ let reset_to_base state = {
   current_state = state.base_state;
   current_sync_extensions = [];
   user_state = GramState.empty;
-  custom_entries = EntryDataMap.empty;
 }
 
 let modify_state_unsync f state =
@@ -78,10 +77,12 @@ let modify_state_unsync f state =
   let current_state = if is_base then base_state else f state.current_state in
   { state with base_state; current_state }
 
-let modify_state_unsync f () = state := modify_state_unsync f !state
+let modify_state_unsync f () =
+  assert_synterp ();
+  state := modify_state_unsync f !state
 
 let modify_keyword_state f =
-  modify_state_unsync (fun {estate;kwstate} -> {estate; kwstate = f kwstate})
+  modify_state_unsync (fun {estate;kwstate;recover;has_non_assoc} -> {estate; kwstate = f kwstate; recover; has_non_assoc})
     ()
 
 let make_entry_unsync make remake state =
@@ -95,6 +96,7 @@ let make_entry_unsync make remake state =
   { state with base_state; current_state }, e
 
 let make_entry_unsync make remake () =
+  assert_synterp();
   let statev, e = make_entry_unsync make remake !state in
   state := statev;
   e
@@ -103,17 +105,17 @@ let add_kw = { add_kw = CLexer.add_keyword_tok }
 
 let epsilon_value (type s tr a) f (e : (s, tr, a) Symbol.t) =
   let r = Production.make (Rule.next Rule.stop e) (fun x _ -> f x) in
-  let { GState.estate; kwstate } = gstate() in
+  let { GState.estate; kwstate; recover; has_non_assoc } = gstate() in
   let estate, entry = Entry.make "epsilon" estate in
   let ext = Fresh (Gramlib.Gramext.First, [None, None, [r]]) in
   let estate, kwstate = safe_extend add_kw estate kwstate entry ext in
   let strm = Stream.empty () in
   let strm = Parsable.make strm in
-  try Some (Entry.parse entry strm {estate;kwstate}) with e when CErrors.noncritical e -> None
+  try Some (Entry.parse entry strm {estate;kwstate;recover;has_non_assoc}) with e when CErrors.noncritical e -> None
 
-let extend_gstate {GState.kwstate; estate} e ext =
+let extend_gstate {GState.kwstate; estate; recover; has_non_assoc} e ext =
   let estate, kwstate = safe_extend add_kw estate kwstate e ext in
-  {GState.kwstate; estate}
+  {GState.kwstate; estate; recover; has_non_assoc}
 
 (* XXX rename to grammar_extend_unsync? *)
 let grammar_extend e ext =
@@ -134,31 +136,38 @@ let grammar_extend_sync user_state entry rules state =
     current_sync_extensions = GramExt entry :: state.current_sync_extensions;
   }
 
-let grammar_extend_sync st e r () = state := grammar_extend_sync st e r !state
+let grammar_extend_sync st e r () =
+  assert_synterp();
+  state := grammar_extend_sync st e r !state
 
-let extend_entry_sync (type a) (tag : a EntryCommand.tag) (name : string) state : _ * a Entry.t =
+type ('a,'b) entry_extension = {
+  eext_fun : 'a -> 'b Entry.t -> GramState.t -> GramState.t;
+  eext_name : 'a -> string;
+  eext_eq : 'a -> 'a -> bool;
+}
+
+let extend_entry_sync (type a b)
+    (tag : (a * b) EntryCommand.tag)
+    (interp:(a,b) entry_extension)
+    (data:a)
+    state
+  : _ * b Entry.t =
+  let name = interp.eext_name data in
   let current_estate, e = Entry.make name state.current_state.estate in
   let current_state = { state.current_state with estate = current_estate } in
-  let custom_entries =
-    let EntryData.Ex old =
-      try EntryDataMap.find tag state.custom_entries
-      with Not_found -> EntryData.Ex String.Map.empty
-    in
-    let () = assert (not @@ String.Map.mem name old) in
-    let entries = String.Map.add name e old in
-    EntryDataMap.add tag (EntryData.Ex entries) state.custom_entries
-  in
+  let user_state = interp.eext_fun data e state.user_state in
   let state = {
     state with
     current_state;
-    current_sync_extensions = EntryExt (tag,name) :: state.current_sync_extensions;
-    custom_entries;
+    current_sync_extensions = EntryExt (tag,data) :: state.current_sync_extensions;
+    user_state;
   }
   in
   state, e
 
-let extend_entry_command tag name =
-  let statev, e = extend_entry_sync tag name !state in
+let extend_entry_sync tag interp data () =
+  assert_synterp();
+  let statev, e = extend_entry_sync tag interp data !state in
   state := statev;
   e
 
@@ -185,8 +194,6 @@ end
 module Lookahead =
 struct
 
-  let err () = raise Stream.Failure
-
   type t = int -> CLexer.keyword_state -> (CLexer.keyword_state,Tok.t) LStream.t -> int option
 
   let rec contiguous n m strm =
@@ -200,7 +207,7 @@ struct
     if contiguous n (n+m-1) strm then Some m else None
 
   let to_entry s (lk : t) =
-    let run kwstate strm = match lk 0 kwstate strm with None -> err () | Some _ -> () in
+    let run kwstate strm = match lk 0 kwstate strm with None -> Error () | Some _ -> Ok () in
     Entry.(of_parser s { parser_fun = run })
 
   let (>>) (lk1 : t) lk2 n kwstate strm = match lk1 n kwstate strm with
@@ -214,25 +221,25 @@ struct
   let lk_empty n kwstate strm = Some n
 
   let lk_kw kw n kwstate strm = match LStream.peek_nth kwstate n strm with
-  | Tok.KEYWORD kw' | Tok.IDENT kw' -> if String.equal kw kw' then Some (n + 1) else None
+  | Some (Tok.KEYWORD kw' | Tok.IDENT kw') -> if String.equal kw kw' then Some (n + 1) else None
   | _ -> None
 
   let lk_kws kws n kwstate strm = match LStream.peek_nth kwstate n strm with
-  | Tok.KEYWORD kw | Tok.IDENT kw -> if List.mem_f String.equal kw kws then Some (n + 1) else None
+  | Some (Tok.KEYWORD kw | Tok.IDENT kw) -> if List.mem_f String.equal kw kws then Some (n + 1) else None
   | _ -> None
 
   let lk_ident n kwstate strm = match LStream.peek_nth kwstate n strm with
-  | Tok.IDENT _ -> Some (n + 1)
+  | Some (Tok.IDENT _) -> Some (n + 1)
   | _ -> None
 
   let lk_name = lk_ident <+> lk_kw "_"
 
   let lk_ident_except idents n kwstate strm = match LStream.peek_nth kwstate n strm with
-  | Tok.IDENT ident when not (List.mem_f String.equal ident idents) -> Some (n + 1)
+  | Some (Tok.IDENT ident) when not (List.mem_f String.equal ident idents) -> Some (n + 1)
   | _ -> None
 
   let lk_nat n kwstate strm = match LStream.peek_nth kwstate n strm with
-  | Tok.NUMBER p when NumTok.Unsigned.is_nat p -> Some (n + 1)
+  | Some (Tok.NUMBER p) when NumTok.Unsigned.is_nat p -> Some (n + 1)
   | _ -> None
 
   let rec lk_list lk_elem n kwstate strm =
@@ -241,7 +248,7 @@ struct
   let lk_ident_list = lk_list lk_ident
 
   let lk_field n kwstate strm = match LStream.peek_nth kwstate n strm with
-    | Tok.FIELD _ -> Some (n+1)
+    | Some (Tok.FIELD _) -> Some (n+1)
     | _ -> None
 
   let lk_qualid = lk_ident >> lk_list lk_field
@@ -385,15 +392,11 @@ module GrammarInterpMap = GrammarCommand.Map(GrammarInterp)
 let grammar_interp = ref GrammarInterpMap.empty
 
 type 'a grammar_command = 'a GrammarCommand.tag
-type 'a entry_command = 'a EntryCommand.tag
 
 let create_grammar_command name interp : _ grammar_command =
   let obj = GrammarCommand.create name in
   let () = grammar_interp := GrammarInterpMap.add obj interp !grammar_interp in
   obj
-
-let create_entry_command name : 'a entry_command =
-  EntryCommand.create name
 
 let extend_grammar_command tag g =
   let modify = GrammarInterpMap.find tag !grammar_interp in
@@ -401,9 +404,21 @@ let extend_grammar_command tag g =
   let (rules, st) = modify.gext_fun g grammar_state in
   grammar_extend_sync st (Dyn (tag,g)) rules ()
 
-let find_custom_entry tag name =
-  let EntryData.Ex map = EntryDataMap.find tag (!state).custom_entries in
-  String.Map.find name map
+module EntryInterp = struct type _ t = EExt : ('a,'b) entry_extension -> ('a * 'b) t end
+module EntryInterpMap = EntryCommand.Map(EntryInterp)
+
+let entry_interp = ref EntryInterpMap.empty
+
+type ('a,'b) entry_command = ('a * 'b) EntryCommand.tag
+
+let create_entry_command name interp : _ entry_command =
+  let obj = EntryCommand.create name in
+  let () = entry_interp := EntryInterpMap.add obj (EExt interp) !entry_interp in
+  obj
+
+let extend_entry_command tag data =
+  let EExt interp = EntryInterpMap.find tag !entry_interp in
+  extend_entry_sync tag interp data ()
 
 (** Registering extra grammar *)
 
@@ -413,13 +428,8 @@ let register_grammars_by_name name grams =
   grammar_names := String.Map.add name grams !grammar_names
 
 let find_grammars_by_name name =
-  try String.Map.find name !grammar_names
-  with Not_found ->
-    let fold (EntryDataMap.Any (tag, EntryData.Ex map)) accu =
-      try Entry.Any (String.Map.find name map) :: accu
-      with Not_found -> accu
-    in
-    EntryDataMap.fold fold (!state).custom_entries []
+  (* XXX look through custom entries somehow? *)
+  Option.default [] (String.Map.find_opt name !grammar_names)
 
 (** Summary functions: the state of the lexer is included in that of the parser.
    Because the grammar affects the set of keywords when adding or removing
@@ -451,10 +461,12 @@ let eq_grams g1 g2 = match g1, g2 with
     let data = GrammarInterpMap.find t1 !grammar_interp in
     data.gext_eq v1 v2
   end
-| EntryExt (t1, v1), EntryExt (t2, v2) ->
+| EntryExt (t1, d1), EntryExt (t2, d2) ->
   begin match EntryCommand.eq t1 t2 with
   | None -> false
-  | Some Refl -> String.equal v1 v2
+  | Some Refl ->
+    let EExt interp = EntryInterpMap.find t1 !entry_interp in
+    interp.eext_eq d1 d2
   end
 | (GramExt _, EntryExt _) | (EntryExt _, GramExt _) -> false
 
@@ -465,21 +477,23 @@ let factorize_grams l1 l2 =
 
 let replay_sync_extension = function
   | GramExt (Dyn (tag,g)) -> extend_grammar_command tag g
-  | EntryExt (tag,name) -> ignore (extend_entry_command tag name : _ Entry.t)
+  | EntryExt (tag,data) -> ignore (extend_entry_command tag data : _ Entry.t)
 
-let unfreeze = function
-  | {frozen_sync;} as frozen ->
-    let to_remove, to_add, _common = factorize_grams (!state).current_sync_extensions frozen_sync in
-    if CList.is_empty to_remove then begin
-      List.iter replay_sync_extension (List.rev to_add);
-      unfreeze_only_keywords frozen
-    end
-    else begin
-      state := reset_to_base !state;
-      List.iter replay_sync_extension (List.rev frozen_sync);
-      (* put back the keyword state, needed to support ssr hacks *)
-      unfreeze_only_keywords frozen
-    end
+let unfreeze ({frozen_sync;} as frozen) =
+  (* allow unfreezing synterp state even during interp phase *)
+  Flags.with_modified_ref Flags.in_synterp_phase (fun _ -> None) (fun () ->
+  let to_remove, to_add, _common = factorize_grams (!state).current_sync_extensions frozen_sync in
+  if CList.is_empty to_remove then begin
+    List.iter replay_sync_extension (List.rev to_add);
+    unfreeze_only_keywords frozen
+  end
+  else begin
+    state := reset_to_base !state;
+    List.iter replay_sync_extension (List.rev frozen_sync);
+    (* put back the keyword state, needed to support ssr hacks *)
+    unfreeze_only_keywords frozen
+  end)
+    ()
 
 let freeze_state state = {
   frozen_sync = state.current_sync_extensions;

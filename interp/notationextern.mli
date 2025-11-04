@@ -19,10 +19,16 @@ open Notation_term
 val notation_entry_eq : notation_entry -> notation_entry -> bool
 (** Equality on [notation_entry]. *)
 
+val notation_entry_compare : notation_entry -> notation_entry -> int
+
 val notation_with_optional_scope_eq : notation_with_optional_scope -> notation_with_optional_scope -> bool
 
 val notation_eq : notation -> notation -> bool
 (** Equality on [notation]. *)
+
+val notation_compare : notation -> notation -> int
+
+val specific_notation_compare : specific_notation -> specific_notation -> int
 
 val notation_binder_kind_eq : notation_binder_kind -> notation_binder_kind -> bool
 (** Equality on [notation_binder_kind]. *)
@@ -46,14 +52,12 @@ val entry_relative_level_eq : entry_relative_level -> entry_relative_level -> bo
 (** Equality on [entry_relative_level]. *)
 
 (** Binds a notation in a given scope to an interpretation *)
-type 'a interp_rule_gen =
+type interp_rule =
   | NotationRule of Constrexpr.specific_notation
-  | AbbrevRule of 'a
+  | AbbrevRule of Globnames.abbreviation
 
-type interp_rule = KerName.t interp_rule_gen
-
-val remove_uninterpretation : interp_rule -> interpretation -> unit
-val declare_uninterpretation : interp_rule -> interpretation -> unit
+val remove_uninterpretation : Environ.env -> interp_rule -> interpretation -> unit
+val declare_uninterpretation : Environ.env -> interp_rule -> interpretation -> unit
 
 type notation_applicative_status =
   | AppBoundedNotation of int
@@ -67,9 +71,9 @@ type notation_rule = {
 }
 
 (** Return the possible notations for a given term *)
-val uninterp_notations : 'a glob_constr_g -> notation_rule list
-val uninterp_cases_pattern_notations : 'a cases_pattern_g -> notation_rule list
-val uninterp_ind_pattern_notations : inductive -> notation_rule list
+val uninterp_notations : Environ.env -> 'a glob_constr_g -> notation_rule list
+val uninterp_cases_pattern_notations : Environ.env -> 'a cases_pattern_g -> notation_rule list
+val uninterp_ind_pattern_notations : Environ.env -> inductive -> notation_rule list
 
 (** State protection *)
 val with_notation_uninterpretation_protection : ('a -> 'b) -> 'a -> 'b

@@ -59,45 +59,54 @@ module type VISIT = sig
 
   (* Add reference / ... in the visit lists.
      These functions silently add the mp of their arg in the mp list *)
-  val add_ref : t -> GlobRef.t -> unit
-  val add_kn : t -> KerName.t -> unit
+  val add_ref : t -> global -> unit
+  val add_kn : t -> KerName.t -> InfvInst.t -> unit
   val add_decl_deps : t -> ml_decl -> unit
   val add_spec_deps : t -> ml_spec -> unit
 
   (* Test functions:
      is a particular object a needed dependency for the current extraction ? *)
-  val needed_ind : t -> MutInd.t -> bool
-  val needed_cst : t -> Constant.t -> bool
+  val needed_ind : t -> MutInd.t -> InfvInst.t -> bool
+  val needed_cst : t -> Constant.t -> InfvInst.t -> bool
   val needed_mp : t -> ModPath.t -> bool
   val needed_mp_all : t -> ModPath.t -> bool
 end
 
 module Visit : VISIT = struct
+  module KNOrd =
+  struct
+    type t = KerName.t * InfvInst.t
+    let compare (kn1, i1) (kn2, i2) =
+      let c = KerName.compare kn1 kn2 in
+      if Int.equal c 0 then InfvInst.compare i1 i2 else c
+  end
+  module KNset = Set.Make(KNOrd)
+
   type t =
       { mutable kn : KNset.t;
-        mutable mp : MPset.t;
-        mutable mp_all : MPset.t }
+        mutable mp : ModPath.Set.t;
+        mutable mp_all : ModPath.Set.t }
   (* the imperative internal visit lists *)
   let make () = {
     kn = KNset.empty;
-    mp = MPset.empty;
-    mp_all = MPset.empty;
+    mp = ModPath.Set.empty;
+    mp_all = ModPath.Set.empty;
   }
   (* the accessor functions *)
-  let needed_ind v i = KNset.mem (MutInd.user i) v.kn
-  let needed_cst v c = KNset.mem (Constant.user c) v.kn
-  let needed_mp v mp = MPset.mem mp v.mp || MPset.mem mp v.mp_all
-  let needed_mp_all v mp = MPset.mem mp v.mp_all
+  let needed_ind v i inst = KNset.mem (MutInd.user i, inst) v.kn
+  let needed_cst v c inst = KNset.mem (Constant.user c, inst) v.kn
+  let needed_mp v mp = ModPath.Set.mem mp v.mp || ModPath.Set.mem mp v.mp_all
+  let needed_mp_all v mp = ModPath.Set.mem mp v.mp_all
   let add_mp v mp =
-    check_loaded_modfile mp; v.mp <- MPset.union (prefixes_mp mp) v.mp
+    check_loaded_modfile mp; v.mp <- ModPath.Set.union (prefixes_mp mp) v.mp
   let add_mp_all v mp =
     check_loaded_modfile mp;
-    v.mp <- MPset.union (prefixes_mp mp) v.mp;
-    v.mp_all <- MPset.add mp v.mp_all
-  let add_kn v kn = v.kn <- KNset.add kn v.kn; add_mp v (KerName.modpath kn)
-  let add_ref v = let open GlobRef in function
-    | ConstRef c -> add_kn v (Constant.user c)
-    | IndRef (ind,_) | ConstructRef ((ind,_),_) -> add_kn v (MutInd.user ind)
+    v.mp <- ModPath.Set.union (prefixes_mp mp) v.mp;
+    v.mp_all <- ModPath.Set.add mp v.mp_all
+  let add_kn v kn inst = v.kn <- KNset.add (kn, inst) v.kn; add_mp v (KerName.modpath kn)
+  let add_ref v r = let open GlobRef in match r.glob with
+    | ConstRef c -> add_kn v (Constant.user c) r.inst
+    | IndRef (ind,_) | ConstructRef ((ind,_),_) -> add_kn v (MutInd.user ind) r.inst
     | VarRef _ -> assert false
   let add_decl_deps v decl =
     decl_iter_references (fun kn -> add_ref v kn) (fun r -> add_ref v r) (fun r -> add_ref v r) decl
@@ -105,8 +114,20 @@ module Visit : VISIT = struct
     spec_iter_references (fun r -> add_ref v r) (fun r -> add_ref v r) (fun r -> add_ref v r) spec
 end
 
+let get_mono_inst_univs = function
+| Monomorphic -> [InfvInst.empty]
+| Polymorphic uctx -> InfvInst.generate uctx
+
+let get_mono_inst = function
+| SFBconst cb -> get_mono_inst_univs cb.const_universes
+| SFBmind mib -> get_mono_inst_univs mib.mind_universes
+| SFBrules _ -> [InfvInst.empty]
+| SFBmodule _ | SFBmodtype _ -> assert false
+
 let add_field_label venv mp = function
-  | (lab, (SFBconst _|SFBmind _ | SFBrules _)) -> Visit.add_kn venv (KerName.make mp lab)
+  | (lab, (SFBconst _|SFBmind _ | SFBrules _  as f)) ->
+    let insts = get_mono_inst f in
+    List.iter (fun inst -> Visit.add_kn venv (KerName.make mp lab) inst) insts
   | (lab, (SFBmodule _|SFBmodtype _)) -> Visit.add_mp_all venv (MPdot (mp,lab))
 
 let rec add_labels venv mp = function
@@ -169,9 +190,14 @@ let vm_state =
 
 let expand_mexpr env mp me =
   let inl = Some (Flags.get_inline_level()) in
+  (* hack: in order not to overwrite the module binding mp, we first give it a
+     name that should not be part of the env and then substitute it away *)
+  let mp0 = ModPath.dummy in
   let state = ((Environ.universes env, Univ.Constraints.empty), Reductionops.inferred_universes) in
-  let mb, (_, cst), _ = Mod_typing.translate_module state vm_state env mp inl (MExpr ([], me, None)) in
-  mod_type mb, mod_delta mb
+  let mb, (_, cst), _ = Mod_typing.translate_module state vm_state env mp0 inl (MExpr ([], me, None)) in
+  let sign = mod_type mb in
+  let reso = mod_delta mb in
+  Modops.subst_modtype_signature_and_resolver mp0 mp sign reso
 
 let expand_modtype env mp me =
   let inl = Some (Flags.get_inline_level()) in
@@ -193,8 +219,8 @@ let flatten_modtype env mp me_alg struc_opt =
 
 let env_for_mtb_with_def env mp me reso idl =
   let struc = Modops.destr_nofunctor mp me in
-  let l = Label.of_id (List.hd idl) in
-  let spot = function (l',SFBconst _) -> Label.equal l l' | _ -> false in
+  let l = List.hd idl in
+  let spot = function (l',SFBconst _) -> Id.equal l l' | _ -> false in
   let before = fst (List.split_when spot struc) in
   Modops.add_structure mp before reso env
 
@@ -204,23 +230,43 @@ let make_cst resolver mp l =
 let make_mind resolver mp l =
   Mod_subst.mind_of_delta_kn resolver (KerName.make mp l)
 
+(* The overwrite functions below are basically a hack to work around the fact
+   that extraction breaks all kinds of reasonable invariants regarding modules.
+   Due to the way signatures are handled, modules can be overwritten in the
+   environment to replace a concrete body by its interface. Needless to say
+   that this is probably wildly unsound, but it works good enough (TM). *)
+
 (* From a [structure_body] (i.e. a list of [structure_field_body])
    to specifications. *)
 
 let rec extract_structure_spec table venv env mp reso = function
   | [] -> []
-  | (l,SFBconst cb) :: msig ->
-      let c = make_cst reso mp l in
-      let s = extract_constant_spec table env c cb in
-      let specs = extract_structure_spec table venv env mp reso msig in
+  | (l, SFBconst cb) :: msig ->
+    let insts = get_mono_inst_univs cb.const_universes in
+    let c = make_cst reso mp l in
+    let map inst = extract_constant_spec table env c inst cb in
+    let consts = List.map map insts in
+    let specs = extract_structure_spec table venv env mp reso msig in
+    let fold s specs =
       if logical_spec s then specs
-      else begin Visit.add_spec_deps venv s; (l,Spec s) :: specs end
-  | (l,SFBmind _) :: msig ->
-      let mind = make_mind reso mp l in
-      let s = Sind (mind, extract_inductive table env mind) in
-      let specs = extract_structure_spec table venv env mp reso msig in
+      else
+        let () = Visit.add_spec_deps venv s in
+        (l, Spec s) :: specs
+    in
+    List.fold_right fold consts specs
+  | (l, SFBmind mib) :: msig ->
+    let insts = get_mono_inst_univs mib.mind_universes in
+    let mind = make_mind reso mp l in
+    let map inst = Sind (extract_inductive table env mind inst) in
+    let minds = List.map map insts in
+    let specs = extract_structure_spec table venv env mp reso msig in
+    let fold s specs =
       if logical_spec s then specs
-      else begin Visit.add_spec_deps venv s; (l,Spec s) :: specs end
+      else
+        let () = Visit.add_spec_deps venv s in
+        (l, Spec s) :: specs
+    in
+    List.fold_right fold minds specs
   | (l, SFBrules _) :: msig ->
       let specs = extract_structure_spec table venv env mp reso msig in
       specs
@@ -246,6 +292,13 @@ and extract_mexpr_spec table venv env mp1 (me_struct_o,me_alg) = match me_alg wi
     let () = Visit.add_mp_all venv mp in
     MTident mp
   | MEwith(me',WithDef(idl,(c,ctx)))->
+      let () = match ctx with
+      | None -> ()
+      | Some auctx ->
+        (* XXX *)
+        if Array.is_empty (UVars.AbstractContext.names auctx).quals then ()
+        else user_err Pp.(str "Extraction of \"with Definition\" clauses not supported for sort polymorphic definitions.")
+      in
       let me_struct,delta = flatten_modtype env mp1 me' me_struct_o in
       let env' = env_for_mtb_with_def env mp1 me_struct delta idl in
       let mt = extract_mexpr_spec table venv env mp1 (None,me') in
@@ -255,7 +308,7 @@ and extract_mexpr_spec table venv env mp1 (me_struct_o,me_alg) = match me_alg wi
          | None -> mt
          | Some (vl,typ) ->
             let () = type_iter_references (fun r -> Visit.add_ref venv r) typ in
-            MTwith(mt,ML_With_type(idl,vl,typ)))
+            MTwith (mt, ML_With_type (InfvInst.empty, idl, vl, typ)))
   | MEwith(me',WithMod(idl,mp))->
       let () = Visit.add_mp_all venv mp in
       MTwith (extract_mexpr_spec table venv env mp1 (None, me'), ML_With_module(idl, mp))
@@ -271,22 +324,22 @@ and extract_mexpression_spec table venv env mp1 (me_struct,me_alg) = match me_al
       | _ -> assert false
       in
       let mp = MPbound mbid in
-      let env' = Modops.add_module_parameter mbid mtb env in
+      let env' = Environ.Internal.overwrite_module_parameter mbid mtb env in
       MTfunsig (mbid, extract_mbody_spec table venv env mp mtb,
                 extract_mexpression_spec table venv env' mp1 (me_struct', me_alg'))
   | MENoFunctor m -> extract_mexpr_spec table venv env mp1 (Some me_struct, m)
 
 and extract_msignature_spec table venv env mp1 reso = function
   | NoFunctor struc ->
-      let env' = Modops.add_structure mp1 struc reso env in
+      let env' = Environ.Internal.overwrite_structure mp1 struc reso env in
       MTsig (mp1, extract_structure_spec table venv env' mp1 reso struc)
   | MoreFunctor (mbid, mtb, me) ->
       let mp = MPbound mbid in
-      let env' = Modops.add_module_parameter mbid mtb env in
+      let env' = Environ.Internal.overwrite_module_parameter mbid mtb env in
       MTfunsig (mbid, extract_mbody_spec table venv env mp mtb,
                 extract_msignature_spec table venv env' mp1 reso me)
 
-and extract_mbody_spec : 'a. _ -> _ -> _ -> _ -> 'a generic_module_body -> _ =
+and extract_mbody_spec : 'a. State.t -> _ -> _ -> _ -> 'a generic_module_body -> _ =
   fun table venv env mp mb -> match mod_type_alg mb with
   | Some ty -> extract_mexpression_spec table venv env mp (mod_type mb, ty)
   | None -> extract_msignature_spec table venv env mp (mod_delta mb) (mod_type mb)
@@ -300,47 +353,60 @@ and extract_mbody_spec : 'a. _ -> _ -> _ -> _ -> 'a generic_module_body -> _ =
 
 let rec extract_structure table access venv env mp reso ~all = function
   | [] -> []
-  | (l,SFBconst cb) :: struc ->
-      (try
-         let sg = Evd.from_env env in
-         let vl,recd,struc = factor_fix env sg l cb struc in
-         let vc = Array.map (make_cst reso mp) vl in
-         let ms = extract_structure table access venv env mp reso ~all struc in
-         let b = Array.exists (Visit.needed_cst venv) vc in
-         if all || b then
-           let d = extract_fixpoint table env sg vc recd in
-           if (not b) && (logical_decl d) then ms
-           else
-            let () = Visit.add_decl_deps venv d in
-            (l, SEdecl d) :: ms
-         else ms
-       with Impossible ->
-         let ms = extract_structure table access venv env mp reso ~all struc in
-         let c = make_cst reso mp l in
-         let b = Visit.needed_cst venv c in
-         if all || b then
-           let d = extract_constant table access env c cb in
-           if (not b) && (logical_decl d) then ms
-           else
-            let () = Visit.add_decl_deps venv d in
-            (l, SEdecl d) :: ms
-         else ms)
-  | (l,SFBmind mib) :: struc ->
-      let ms = extract_structure table access venv env mp reso ~all struc in
-      let mind = make_mind reso mp l in
-      let b = Visit.needed_ind venv mind in
+  | (l, SFBconst cb) :: struc ->
+    let sg = Evd.from_env env in
+    let fix, struc = match factor_fix env sg l cb struc with
+    | (vl, recd, struc) -> Some (vl, recd), struc
+    | exception Impossible -> None, struc
+    in
+    let ms = extract_structure table access venv env mp reso ~all struc in
+    let insts = get_mono_inst_univs cb.const_universes in
+    let c = make_cst reso mp l in
+    let map inst = match fix with
+    | None ->
+      let b = Visit.needed_cst venv c inst in
       if all || b then
-        let d = Dind (mind, extract_inductive table env mind) in
-        if (not b) && (logical_decl d) then ms
+        let d = extract_constant table access env c inst cb in
+        if (not b) && (logical_decl d) then None
+        else
+        let () = Visit.add_decl_deps venv d in
+        Some (l, SEdecl d)
+      else None
+    | Some (vl, recd) ->
+      let vc = Array.map (make_cst reso mp) vl in
+      let b = Array.exists (fun vf -> Visit.needed_cst venv vf inst) vc in
+      if all || b then
+        let d = extract_fixpoint table env sg vc inst recd in
+        if (not b) && (logical_decl d) then None
         else
           let () = Visit.add_decl_deps venv d in
-          (l, SEdecl d) :: ms
-      else ms
+          Some (l, SEdecl d)
+      else None
+    in
+    let consts = List.map_filter map insts in
+    consts @ ms
+  | (l, SFBmind mib) :: struc ->
+    let ms = extract_structure table access venv env mp reso ~all struc in
+    let insts = get_mono_inst_univs mib.mind_universes in
+    let mind = make_mind reso mp l in
+    let map inst =
+      let b = Visit.needed_ind venv mind inst in
+      if all || b then
+        let d = Dind (extract_inductive table env mind inst) in
+        if (not b) && (logical_decl d) then None
+        else
+          let () = Visit.add_decl_deps venv d in
+          Some (l, SEdecl d)
+      else None
+    in
+    let inds = List.map_filter map insts in
+    inds @ ms
   | (l, SFBrules rrb) :: struc ->
-      let b = List.exists (fun (cst, _) -> Visit.needed_cst venv cst) rrb.rewrules_rules in
+      let inst = InfvInst.empty in (* FIXME ? *)
+      let b = List.exists (fun (cst, _) -> Visit.needed_cst venv cst inst) rrb.rewrules_rules in
       let ms = extract_structure table access venv env mp reso ~all struc in
       if all || b then begin
-        List.iter (fun (cst, _) -> Table.add_symbol_rule table (ConstRef cst) l) rrb.rewrules_rules;
+        List.iter (fun (cst, _) -> Table.add_symbol_rule (State.get_table table) { glob = ConstRef cst; inst } l) rrb.rewrules_rules;
         ms
       end else ms
   | (l,SFBmodule mb) :: struc ->
@@ -361,14 +427,14 @@ let rec extract_structure table access venv env mp reso ~all = function
 
 and extract_mexpr table access venv env mp = function
   | MEwith _ -> assert false (* no 'with' syntax for modules *)
-  | me when lang () != Ocaml || Table.is_extrcompute () ->
+  | me when lang () != Ocaml ->
       (* In Haskell/Scheme, we expand everything.
          For now, we also extract everything, dead code will be removed later
          (see [Modutil.optimize_struct]. *)
       let sign, delta = expand_mexpr env mp me in
       extract_msignature table access venv env mp delta ~all:true sign
   | MEident mp ->
-      if is_modfile mp && not (modular ()) then error_MPfile_as_mod mp false;
+      if is_modfile mp && not (State.get_modular table) then error_MPfile_as_mod mp false;
       Visit.add_mp_all venv mp; Miniml.MEident mp
   | MEapply (me, arg) ->
       Miniml.MEapply (extract_mexpr table access venv env mp me,
@@ -382,7 +448,7 @@ and extract_mexpression table access venv env mp mty = function
       | NoFunctor _ -> assert false
       in
       let mp1 = MPbound mbid in
-      let env' = Modops.add_module_parameter mbid mtb env in
+      let env' = Environ.Internal.overwrite_module_parameter mbid mtb env in
       Miniml.MEfunctor
         (mbid,
          extract_mbody_spec table venv env mp1 mtb,
@@ -390,11 +456,11 @@ and extract_mexpression table access venv env mp mty = function
 
 and extract_msignature table access venv env mp reso ~all = function
   | NoFunctor struc ->
-      let env' = Modops.add_structure mp struc reso env in
-      Miniml.MEstruct (mp,extract_structure table access venv env' mp reso ~all struc)
+    let env' = Environ.Internal.overwrite_structure mp struc reso env in
+    Miniml.MEstruct (mp, extract_structure table access venv env' mp reso ~all struc)
   | MoreFunctor (mbid, mtb, me) ->
       let mp1 = MPbound mbid in
-      let env' = Modops.add_module_parameter mbid mtb env in
+      let env' = Environ.Internal.overwrite_module_parameter mbid mtb env in
       Miniml.MEfunctor
         (mbid,
          extract_mbody_spec table venv env mp1 mtb,
@@ -410,12 +476,12 @@ and extract_module table access venv env mp ~all mb =
   let impl = match Mod_declarations.mod_expr mb with
     | Abstract -> error_no_module_expr mp
     | Algebraic me -> extract_mexpression table access venv env mp (mod_type mb) me
-    | Struct sign ->
+    | Struct (reso, sign) ->
       (* This module has a signature, otherwise it would be FullStruct.
          We extract just the elements required by this signature. *)
       let () = add_labels venv mp (mod_type mb) in
       let sign = Modops.annotate_struct_body sign (mod_type mb) in
-      extract_msignature table access venv env mp (mod_delta mb) ~all:false sign
+      extract_msignature table access venv env mp reso ~all:false sign
     | FullStruct -> extract_msignature table access venv env mp (mod_delta mb) ~all (mod_type mb)
   in
   (* Slight optimization: for modules without explicit signatures
@@ -483,7 +549,7 @@ let mono_filename f =
 (* Builds a suitable filename from a module id *)
 
 let module_filename table mp =
-  let f = file_of_modfile table mp in
+  let f = file_of_modfile (State.get_table table) mp in
   let id = Id.of_string f in
   let f = Filename.concat (output_directory ()) f in
   let d = descr () in
@@ -495,13 +561,13 @@ let module_filename table mp =
 
 let print_one_decl table struc mp decl =
   let d = descr () in
-  reset_renaming_tables AllButExternal;
-  set_phase Pre;
+  let () = State.reset table in
+  let table = State.set_phase table Pre in
   ignore (d.pp_struct table struc);
-  set_phase Impl;
-  push_visible mp [];
-  let ans = d.pp_decl table decl in
-  pop_visible ();
+  let table = State.set_phase table Impl in
+  let ans = State.with_visibility table mp [] begin fun table ->
+    d.pp_decl table decl
+  end in
   v 0 ans
 
 (*s Extraction of a ml struct to a file. *)
@@ -509,9 +575,7 @@ let print_one_decl table struc mp decl =
 (** For Recursive Extraction, writing directly on stdout
     won't work with rocqide, we use a buffer instead *)
 
-let buf = Buffer.create 1000
-
-let formatter dry file =
+let formatter buf dry file =
   let ft =
     if dry then Format.make_formatter (fun _ _ _ -> ()) (fun _ -> ())
     else
@@ -539,9 +603,9 @@ let get_comment () =
     Some (prlist_with_sep spc str split_comment)
 
 let print_structure_to_file table (fn,si,mo) dry struc =
-  Buffer.clear buf;
+  let buf = Buffer.create 1000 in
   let d = descr () in
-  reset_renaming_tables AllButExternal;
+  let () = State.reset table in
   let unsafe_needs = {
     mldummy = struct_ast_search Mlutil.isMLdummy struc;
     tdummy = struct_type_search Mlutil.isTdummy struc;
@@ -551,16 +615,16 @@ let print_structure_to_file table (fn,si,mo) dry struc =
       else struct_ast_search (function MLmagic _ -> true | _ -> false) struc }
   in
   (* First, a dry run, for computing objects to rename or duplicate *)
-  set_phase Pre;
+  let table = State.set_phase table Pre in
   ignore (d.pp_struct table struc);
   let opened = opened_libraries table in
   (* Print the implementation *)
   let cout = if dry then None else Option.map open_out fn in
-  let ft = formatter dry cout in
+  let ft = formatter buf dry cout in
   let comment = get_comment () in
   begin try
     (* The real printing of the implementation *)
-    set_phase Impl;
+    let table = State.set_phase table Impl in
     pp_with ft (d.preamble table mo comment opened unsafe_needs);
     pp_with ft (d.pp_struct table struc);
     Format.pp_print_flush ft ();
@@ -574,9 +638,9 @@ let print_structure_to_file table (fn,si,mo) dry struc =
   Option.iter
     (fun si ->
        let cout = open_out si in
-       let ft = formatter false (Some cout) in
+       let ft = formatter buf false (Some cout) in
        begin try
-         set_phase Intf;
+         let table = State.set_phase table Intf in
          pp_with ft (d.sig_preamble table mo comment opened unsafe_needs);
          pp_with ft (d.pp_sig table (signature_of_structure struc));
          Format.pp_print_flush ft ();
@@ -590,7 +654,6 @@ let print_structure_to_file table (fn,si,mo) dry struc =
   (* Print the buffer content via Rocq standard formatter (ok with rocqide). *)
   if not (Int.equal (Buffer.length buf) 0) then begin
     Feedback.msg_notice (str (Buffer.contents buf));
-    Buffer.reset buf
   end
 
 
@@ -598,21 +661,15 @@ let print_structure_to_file table (fn,si,mo) dry struc =
 (*s Part III: the actual extraction commands *)
 (*********************************************)
 
-
-let reset () =
-  reset_renaming_tables Everything
-
-let init ?(compute=false) ?(inner=false) modular library =
+let init ?(inner=false) ~modular ~library () =
   if not inner then check_inside_section ();
-  set_keywords (descr ()).keywords;
-  set_modular modular;
-  set_library library;
-  set_extrcompute compute;
-  reset ();
+  let keywords = (descr ()).keywords in
+  let state = State.make ~modular ~library ~keywords () in
   if modular && lang () == Scheme then error_scheme ();
-  Table.make_table ()
+  state
 
 let warns table =
+  let table = State.get_table table in
   warning_opaques table (access_opaque ());
   warning_axioms table
 
@@ -624,16 +681,20 @@ let rec locate_ref = function
   | qid::l ->
       let mpo = try Some (Nametab.locate_module qid) with Not_found -> None
       and ro =
-        try Some (Smartlocate.global_with_alias qid)
+        try
+          let gr = Smartlocate.global_with_alias qid in
+          let inst = Environ.universes_of_global (Global.env ()) gr in
+          Some (List.map (fun inst -> { glob = gr; inst }) (InfvInst.generate inst))
         with Nametab.GlobalizationError _ | UserError _ -> None
       in
       match mpo, ro with
         | None, None -> Nametab.error_global_not_found ~info:Exninfo.null qid
-        | None, Some r -> let refs,mps = locate_ref l in r::refs,mps
+        | None, Some r ->
+          let refs, mps = locate_ref l in r @ refs,mps
         | Some mp, None -> let refs,mps = locate_ref l in refs,mp::mps
         | Some mp, Some r ->
-           warning_ambiguous_name ?loc:qid.CAst.loc (qid,mp,r);
-           let refs,mps = locate_ref l in refs,mp::mps
+          let () = warning_ambiguous_name ?loc:qid.CAst.loc (qid, mp, (List.hd r).glob) in
+          let refs,mps = locate_ref l in refs,mp::mps
 
 (*s Recursive extraction in the Rocq toplevel. The vernacular command is
     \verb!Recursive Extraction! [qualid1] ... [qualidn]. Also used when
@@ -641,12 +702,11 @@ let rec locate_ref = function
     \verb!Extraction "file"! [qualid1] ... [qualidn]. *)
 
 let full_extr opaque_access f (refs,mps) =
-  let table = init false false in
+  let table = init ~modular:false ~library:false () in
   List.iter (fun mp -> if is_modfile mp then error_MPfile_as_mod mp true) mps;
   let struc = optimize_struct table (refs,mps) (mono_environment table ~opaque_access refs mps) in
   let () = warns table in
-  print_structure_to_file table (mono_filename f) false struc;
-  reset ()
+  print_structure_to_file table (mono_filename f) false struc
 
 let full_extraction ~opaque_access f lr =
   full_extr opaque_access f (locate_ref lr)
@@ -655,7 +715,7 @@ let full_extraction ~opaque_access f lr =
    decomposed in many files, one per Rocq .v file *)
 
 let separate_extraction ~opaque_access lr =
-  let table = init true false in
+  let table = init ~modular:true ~library:false () in
   let refs,mps = locate_ref lr in
   let struc = optimize_struct table (refs,mps) (mono_environment table ~opaque_access refs mps) in
   let () = List.iter (function
@@ -666,12 +726,12 @@ let separate_extraction ~opaque_access lr =
   in
   let () = warns table in
   let print = function
-    | (MPfile dir as mp, sel) as e ->
-        print_structure_to_file table (module_filename table mp) false [e]
+    | (MPfile dir, sel) as e ->
+        print_structure_to_file table (module_filename table dir) false [e]
     | (MPdot _ | MPbound _), _ -> assert false
   in
-  List.iter print struc;
-  reset ()
+  let () = List.iter print struc in
+  ()
 
 (*s Simple extraction in the Rocq toplevel. The vernacular command
     is \verb!Extraction! [qualid]. *)
@@ -680,7 +740,7 @@ let simple_extraction ~opaque_access r =
   match locate_ref [r] with
   | ([], [mp]) as p -> full_extr opaque_access None p
   | [r],[] ->
-      let table = init false false in
+      let table = init ~modular:false ~library:false () in
       let struc = optimize_struct table ([r],[]) (mono_environment table ~opaque_access [r] []) in
       let d = get_decl_in_structure r struc in
       let () = warns table in
@@ -689,7 +749,6 @@ let simple_extraction ~opaque_access r =
         else mt ()
       in
       let ans = flag ++ print_one_decl table struc (modpath_of_r r) d in
-      reset ();
       Feedback.msg_notice ans
   | _ -> assert false
 
@@ -698,7 +757,7 @@ let simple_extraction ~opaque_access r =
   \verb!(Recursive) Extraction Library! [M]. *)
 
 let extraction_library ~opaque_access is_rec CAst.{loc;v=m} =
-  let table = init true true in
+  let table = init ~modular:true ~library:true () in
   let dir_m =
     (* XXX WTF is going on here? *)
     let q = qualid_of_ident m in
@@ -718,38 +777,13 @@ let extraction_library ~opaque_access is_rec CAst.{loc;v=m} =
   let struc = optimize_struct table ([],[]) struc in
   let () = warns table in
   let print = function
-    | (MPfile dir as mp, sel) as e ->
+    | (MPfile dir, sel) as e ->
         let dry = not is_rec && not (DirPath.equal dir dir_m) in
-        print_structure_to_file table (module_filename table mp) dry [e]
+        print_structure_to_file table (module_filename table dir) dry [e]
     | _ -> assert false
   in
-  List.iter print struc;
-  reset ()
-
-(** For extraction compute, we flatten all the module structure,
-    getting rid of module types or unapplied functors *)
-
-let flatten_structure struc =
-  let rec flatten_elem (lab,elem) = match elem with
-    |SEdecl d -> [d]
-    |SEmodtype _ -> []
-    |SEmodule m -> match m.ml_mod_expr with
-      |MEfunctor _ -> []
-      |MEident _ | MEapply _ -> assert false (* should be expanded *)
-      |MEstruct (_,elems) -> flatten_elems elems
-  and flatten_elems l = List.flatten (List.map flatten_elem l)
-  in flatten_elems (List.flatten (List.map snd struc))
-
-let structure_for_compute ~opaque_access env sg c =
-  let table = init false false ~compute:true in
-  let ast, mlt = Extraction.extract_constr table env sg c in
-  let ast = Mlutil.normalize ast in
-  let refs = ref GlobRef.Set.empty in
-  let add_ref r = refs := GlobRef.Set.add r !refs in
-  let () = ast_iter_references add_ref add_ref add_ref ast in
-  let refs = GlobRef.Set.elements !refs in
-  let struc = optimize_struct table (refs,[]) (mono_environment table ~opaque_access refs []) in
-  table, (flatten_structure struc), ast, mlt
+  let () = List.iter print struc in
+  ()
 
 (* For the test-suite :
    extraction to a temporary file + run ocamlc on it *)
@@ -790,15 +824,16 @@ let extract_and_compile ~opaque_access l =
 
 (* Show the extraction of the current ongoing proof *)
 let show_extraction ~pstate =
-  let table = init ~inner:true false false in
+  let table = init ~inner:true ~modular:false ~library:false () in
   let prf = Declare.Proof.get pstate in
   let sigma, env = Declare.Proof.get_current_context pstate in
   let trms = Proof.partial_proof prf in
   let extr_term t =
+    (* FIXME: substitute relevances with ground ones *)
     let ast, ty = extract_constr table env sigma t in
     let mp = Lib.current_mp () in
-    let l = Label.of_id (Declare.Proof.get_name pstate) in
-    let fake_ref = GlobRef.ConstRef (Constant.make2 mp l) in
+    let l = Declare.Proof.get_name pstate in
+    let fake_ref = { glob = GlobRef.ConstRef (Constant.make2 mp l); inst = InfvInst.empty } in
     let decl = Dterm (fake_ref, ast, ty) in
     print_one_decl table [] mp decl
   in

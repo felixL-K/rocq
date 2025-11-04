@@ -64,6 +64,7 @@ type ('constr, 'types, 'r) ptype_error =
   | NumberBranches of ('constr, 'types) punsafe_judgment * int
   | IllFormedCaseParams
   | IllFormedBranch of 'constr * pconstructor * 'constr * 'constr
+  | BadProjType of ('constr, 'types) punsafe_judgment * Projection.t
   | Generalization of (Name.t * 'types) * ('constr, 'types) punsafe_judgment
   | ActualType of ('constr, 'types) punsafe_judgment * 'types
   | IncorrectPrimitive of (CPrimitives.op_or_type,'types) punsafe_judgment * 'types
@@ -72,8 +73,9 @@ type ('constr, 'types, 'r) ptype_error =
   | IllFormedRecBody of 'constr pguard_error * (Name.t,'r) Context.pbinder_annot array * int * env * ('constr, 'types) punsafe_judgment array
   | IllTypedRecBody of
       int * (Name.t,'r) Context.pbinder_annot array * ('constr, 'types) punsafe_judgment array * 'types array
-  | UnsatisfiedQConstraints of Sorts.QConstraints.t
+  | UnsatisfiedElimConstraints of Sorts.ElimConstraints.t
   | UnsatisfiedConstraints of Constraints.t
+  | UnsatisfiedQCumulConstraints of Sorts.QCumulConstraints.t
   | UndeclaredQualities of Sorts.QVar.Set.t
   | UndeclaredUniverses of Level.Set.t
   | DisallowedSProp
@@ -82,6 +84,8 @@ type ('constr, 'types, 'r) ptype_error =
   | BadInvert
   | BadVariance of { lev : Level.t; expected : Variance.t; actual : Variance.t }
   | UndeclaredUsedVariables of { declared_vars : Id.Set.t; inferred_vars : Id.Set.t }
+  | IllFormedConstant of Constant.t * KerName.t
+  | IllFormedInductive of MutInd.t * KerName.t
 
 type type_error = (constr, types, Sorts.relevance) ptype_error
 
@@ -130,6 +134,8 @@ val error_ill_formed_branch : env -> constr -> pconstructor -> constr -> constr 
 
 val error_generalization : env -> Name.t * types -> unsafe_judgment -> 'a
 
+val error_bad_proj_type : env -> unsafe_judgment -> Projection.t -> 'a
+
 val error_actual_type : env -> unsafe_judgment -> types -> 'a
 
 val error_incorrect_primitive : env -> (CPrimitives.op_or_type,types) punsafe_judgment -> types -> 'a
@@ -147,9 +153,11 @@ val error_ill_formed_rec_body :
 val error_ill_typed_rec_body  :
   env -> int -> Name.t binder_annot array -> unsafe_judgment array -> types array -> 'a
 
-val error_unsatisfied_qconstraints : env -> Sorts.QConstraints.t -> 'a
+val error_unsatisfied_elim_constraints : env -> Sorts.ElimConstraints.t -> 'a
 
 val error_unsatisfied_constraints : env -> Constraints.t -> 'a
+
+val error_unsatisfied_qcumul_constraints : env -> Sorts.QCumulConstraints.t -> 'a
 
 val error_undeclared_qualities : env -> Sorts.QVar.Set.t -> 'a
 
@@ -166,6 +174,10 @@ val error_bad_invert : env -> 'a
 val error_bad_variance : env -> lev:Level.t -> expected:Variance.t -> actual:Variance.t -> 'a
 
 val error_undeclared_used_variables : env -> declared_vars:Id.Set.t -> inferred_vars:Id.Set.t -> 'a
+
+val error_ill_formed_constant : env -> Constant.t -> KerName.t -> 'a
+
+val error_ill_formed_inductive : env -> MutInd.t -> KerName.t -> 'a
 
 val map_pguard_error : ('c -> 'd) -> 'c pguard_error -> 'd pguard_error
 val map_ptype_error : ('r1 -> 'r2) -> ('c -> 'd) -> ('c, 'c, 'r1) ptype_error -> ('d, 'd, 'r2) ptype_error

@@ -64,7 +64,7 @@ let print_ref env reduce ref udecl =
       let ctx,ccl = Reductionops.whd_decompose_prod_decls env sigma (EConstr.of_constr typ)
       in EConstr.to_constr sigma (EConstr.it_mkProd_or_LetIn ccl ctx)
     else typ in
-  let typ = Arguments_renaming.rename_type typ ref in
+  let typ = Arguments_renaming.rename_type env typ ref in
   let impargs = select_stronger_impargs (implicits_of_global ref) in
   let impargs = List.map binding_kind_of_status impargs in
   let variance = let open GlobRef in match ref with
@@ -298,7 +298,7 @@ let print_projection env ref =
       | Some p -> [pr_global ref ++ str " is a primitive projection of " ++ pr_global (IndRef (Projection.Repr.inductive p))]
       | None ->
       try
-        let ind = (Structures.Structure.find_from_projection cst).name in
+        let ind = (Structures.Structure.find_from_projection env cst).name in
         [pr_global ref ++ str " is a projection of " ++ pr_global (IndRef ind)]
       with Not_found -> []
     end
@@ -314,20 +314,22 @@ let print_type_in_type env ref =
 
 (** Printing primitive projection status *)
 
-let print_primitive_record recflag mipv = function
+let print_primitive_record recflag mipv =
+  let mipv = Array.to_list mipv in
+  mipv |> List.concat_map @@ fun mip -> match mip.mind_record with
   | PrimRecord _ ->
     let eta = match recflag with
-    | CoFinite | Finite -> str" without eta conversion"
-    | BiFinite -> str " with eta conversion"
+      | CoFinite | Finite -> str" without eta conversion"
+      | BiFinite -> str " with eta conversion"
     in
-    [Id.print mipv.(0).mind_typename ++ str" has primitive projections" ++ eta ++ str"."]
+    [Id.print mip.mind_typename ++ str" has primitive projections" ++ eta ++ str"."]
   | FakeRecord | NotRecord -> []
 
 let print_primitive env ref =
   match ref with
   | GlobRef.IndRef ind ->
     let mib = Environ.lookup_mind (fst ind) env in
-      print_primitive_record mib.mind_finite mib.mind_packets mib.mind_record
+      print_primitive_record mib.mind_finite mib.mind_packets
   | _ -> []
 
 (** Printing arguments status (scopes, implicit, names) *)
@@ -414,11 +416,11 @@ let print_arguments env ref =
     | _ -> [], [], None
   in
   let names, not_renamed =
-    try Arguments_renaming.arguments_names ref, false
+    try Arguments_renaming.arguments_names env ref, false
     with Not_found ->
       let ty, _ = Typeops.type_of_global_in_context env ref in
       List.map pi1 (Impargs.compute_implicits_names env (Evd.from_env env) (EConstr.of_constr ty)), true in
-  let scopes = Notation.find_arguments_scope ref in
+  let scopes = Notation.find_arguments_scope env ref in
   let flags = if needs_extra_scopes env ref scopes then `ExtraScopes::flags else flags in
   let impls = Impargs.extract_impargs_data (Impargs.implicits_of_global ref) in
   let impls, moreimpls = match impls with
@@ -427,7 +429,7 @@ let print_arguments env ref =
   in
   let impls = main_implicits 0 names recargs scopes impls in
   let moreimpls = List.map (fun (_,i) -> List.map extra_implicit_kind_of_status i) moreimpls in
-  let bidi = Pretyping.get_bidirectionality_hint ref in
+  let bidi = Pretyping.get_bidirectionality_hint env ref in
   let impls = insert_fake_args nargs_for_red bidi impls in
   if List.for_all is_dummy impls && moreimpls = [] && flags = [] then []
   else
@@ -459,8 +461,8 @@ let print_section_deps env ref =
 
 (** Printing bidirectionality status *)
 
-let print_bidi_hints gr =
-  match Pretyping.get_bidirectionality_hint gr with
+let print_bidi_hints env gr =
+  match Pretyping.get_bidirectionality_hint env gr with
   | None -> []
   | Some nargs ->
     [str "Using typing information from context after typing the " ++ int nargs ++ str " first arguments"]
@@ -531,7 +533,7 @@ let print_inductive_args env mind mib =
     (* We don't use the PrimRecord field as it misses the projections corresponding to local definition *)
     try
       Array.mapi (fun i mip ->
-          let projs = Option.List.flatten (Structures.Structure.find_projections (mind,i)) in
+          let projs = Option.List.flatten (Structures.Structure.find_projections env (mind,i)) in
           (mip.mind_consnames, Array.of_list projs)) mib.mind_packets
     with
       Not_found (* find_projections *) ->
@@ -552,7 +554,7 @@ let print_inductive_with_infos env mind udecl =
   let mipv = mib.mind_packets in
   Printmod.pr_mutual_inductive_body env mind mib udecl ++
   with_line_skip
-    (print_primitive_record mib.mind_finite mipv mib.mind_record @
+    (print_primitive_record mib.mind_finite mipv @
      print_inductive_args env mind mib)
 
 let print_section_variable_with_infos env sigma id =
@@ -646,7 +648,7 @@ let print_global_reference access env sigma gref udecl =
   | VarRef id -> print_section_variable_with_infos env sigma id
 
 let glob_constr_of_abbreviation kn =
-  let (vars,a) = Abbreviation.search_abbreviation kn in
+  let (vars,a) = Abbreviation.find_interp kn in
   (List.map fst vars, Notation_ops.glob_constr_of_notation_constr a)
 
 let print_abbreviation_body env kn (vars,c) =
@@ -658,7 +660,7 @@ let print_abbreviation_body env kn (vars,c) =
         spc () ++ str ":=") ++
      spc () ++
      Vernacstate.System.protect (fun () ->
-         Abbreviation.toggle_abbreviation ~on:false ~use:ParsingAndPrinting kn;
+         Abbreviation.toggle ~on:false ~use:ParsingAndPrinting kn;
          pr_glob_constr_env env (Evd.from_env env) c) ())
 
 let print_abbreviation access env sigma kn =
@@ -715,20 +717,20 @@ let print_library_leaf env sigma ~with_values mp lobj =
           (try Some(print_named_decl env sigma false id) with Not_found -> None)
       end @@
       DynHandle.add Declare.Internal.Constant.tag begin fun (id,_) ->
-        let kn = Constant.make2 mp (Label.of_id id) in
+        let kn = Constant.make2 mp id in
         Some (print_constant env ~with_values false kn None)
       end @@
       DynHandle.add DeclareInd.Internal.objInductive begin fun (id,_) ->
-        let kn = MutInd.make2 mp (Label.of_id id) in
+        let kn = MutInd.make2 mp id in
         Some (print_inductive env kn None)
       end @@
       DynHandle.empty
     in
     handle handler o
   | ModuleObject (id,_) ->
-    Some (Printmod.print_module ~with_body:(Option.has_some with_values) (MPdot (mp,Label.of_id id)))
+    Some (Printmod.print_module ~with_body:(Option.has_some with_values) (MPdot (mp, id)))
   | ModuleTypeObject (id,_) ->
-    Some (print_modtype (MPdot (mp, Label.of_id id)))
+    Some (print_modtype (MPdot (mp, id)))
   | IncludeObject _ | KeepObject _ | EscapeObject _ | ExportObject _ -> None
 
 let decr = Option.map ((+) (-1))
@@ -780,7 +782,7 @@ let handleF h (Libobject.Dyn.Dyn (tag, o)) = match DynHandleF.find tag h with
 let print_full_pure_atomic access env sigma mp lobj =
   let handler =
     DynHandleF.add Declare.Internal.Constant.tag begin fun (id,_) ->
-      let kn = KerName.make mp (Label.of_id id) in
+      let kn = KerName.make mp id in
       let con = Global.constant_of_delta_kn kn in
       let cb = Global.lookup_constant con in
       let typ = cb.const_type in
@@ -807,7 +809,7 @@ let print_full_pure_atomic access env sigma mp lobj =
       ++ str "." ++ fnl () ++ fnl ()
     end @@
     DynHandleF.add DeclareInd.Internal.objInductive begin fun (id,_) ->
-      let kn = KerName.make mp (Label.of_id id) in
+      let kn = KerName.make mp id in
       let mind = Global.mind_of_delta_kn kn in
       let mib = Global.lookup_mind mind in
       Printmod.pr_mutual_inductive_body (Global.env()) mind mib None ++
@@ -821,10 +823,10 @@ let print_full_pure_leaf access env sigma mp = function
   | AtomicObject lobj -> print_full_pure_atomic access env sigma mp lobj
   | ModuleObject (id, _) ->
     (* TODO: make it reparsable *)
-    print_module (MPdot (mp,Label.of_id id)) ++ str "." ++ fnl () ++ fnl ()
+    print_module (MPdot (mp, id)) ++ str "." ++ fnl () ++ fnl ()
   | ModuleTypeObject (id, _) ->
     (* TODO: make it reparsable *)
-    print_modtype (MPdot (mp,Label.of_id id)) ++ str "." ++ fnl () ++ fnl ()
+    print_modtype (MPdot (mp, id)) ++ str "." ++ fnl () ++ fnl ()
   | _ -> mt()
 
 let print_full_pure_context access env sigma =
@@ -937,6 +939,16 @@ let loc_info gr =
   | None -> mt()
   | Some loc -> cut() ++ hov 0 (str "Declared in" ++ spc() ++ pr_loc_use_dp loc)
 
+let pr_dir dir =
+  let s,mp =
+    let open Nametab in
+    let open GlobDirRef in match dir with
+    | DirOpenModule mp -> "Open Module", ModPath.print mp
+    | DirOpenModtype mp -> "Open Module Type", ModPath.print mp
+    | DirOpenSection dir -> "Open Section", pr_path dir
+  in
+  str s ++ spc () ++ mp
+
 let pr_located_qualid env = function
   | Term ref ->
       let ref_str = let open GlobRef in match ref with
@@ -949,15 +961,7 @@ let pr_located_qualid env = function
       v 0 (hov 0 (str ref_str ++ spc () ++ pr_path (Nametab.path_of_global ref) ++ extra))
   | Abbreviation kn ->
     str "Notation" ++ spc () ++ pr_path (Nametab.path_of_abbreviation kn)
-  | Dir dir ->
-      let s,mp =
-        let open Nametab in
-        let open GlobDirRef in match dir with
-        | DirOpenModule mp -> "Open Module", ModPath.print mp
-        | DirOpenModtype mp -> "Open Module Type", ModPath.print mp
-        | DirOpenSection dir -> "Open Section", pr_path dir
-      in
-      str s ++ spc () ++ mp
+  | Dir dir -> pr_dir dir
   | Module mp ->
     str "Module" ++ spc () ++ pr_path (Nametab.path_of_module mp)
   | ModuleType mp ->
@@ -980,7 +984,7 @@ let print_any_name access env sigma na udecl =
   | Term gref -> print_global_reference access env sigma gref udecl
   | Abbreviation kn -> print_abbreviation access env sigma kn
   | Module mp -> print_module mp
-  | Dir _ -> mt ()
+  | Dir dir -> pr_dir dir
   | ModuleType mp -> print_modtype mp
   | Other (obj, info) -> info.print obj
   | Undefined qid ->
@@ -1024,11 +1028,11 @@ exception PrintNotationNotFound of Constrexpr.notation_entry * string
 let () = CErrors.register_handler @@ function
   | PrintNotationNotFound (entry, ntn_str) ->
       let entry_string = match entry with
-      | Constrexpr.InConstrEntry -> "."
-      | Constrexpr.InCustomEntry e -> " in " ^ e ^ " entry."
+      | Constrexpr.InConstrEntry -> str "."
+      | Constrexpr.InCustomEntry e -> str " in " ++ Nametab.CustomEntries.pr e ++ str " entry."
       in
       Some Pp.(str "\"" ++ str ntn_str ++ str "\"" ++ spc ()
-        ++ str "cannot be interpreted as a known notation" ++ str entry_string ++ spc ()
+        ++ str "cannot be interpreted as a known notation" ++ entry_string ++ spc ()
         ++ strbrk "Make sure that symbols are surrounded by spaces and that holes are explicitly denoted by \"_\".")
   | _ -> None
 
@@ -1037,18 +1041,14 @@ let error_print_notation_not_found e s =
 
 let print_notation env sigma entry raw_ntn =
   (* make sure entry exists *)
-  let () =
-    match entry with
-    | Constrexpr.InConstrEntry -> ()
-    | Constrexpr.InCustomEntry e -> Metasyntax.check_custom_entry e
-  in
+  let entry = Metasyntax.intern_notation_entry entry in
   (* convert notation string to key. eg. "x + y" to "_ + _" *)
   let interp_ntn = Notation.interpret_notation_string raw_ntn in
   let ntn = (entry, interp_ntn) in
   try
     let lvl = Notation.level_of_notation ntn in
     let args = Notgram_ops.non_terminals_of_notation ntn in
-    let pplvl = Metasyntax.pr_level ntn lvl args in
+    let pplvl = Metasyntax.pr_level lvl args in
     Pp.(str "Notation \"" ++ str interp_ntn ++ str "\"" ++ spc ()
       ++ pplvl ++ pr_comma () ++ print_notation_grammar env sigma ntn
       ++ str ".")
@@ -1064,7 +1064,7 @@ let print_about_global_reference ?loc env ref udecl =
     print_name_infos env ref @
     print_reduction_behaviour ref @
     print_opacity env ref @
-    print_bidi_hints ref @
+    print_bidi_hints env ref @
     [hov 0 (str "Expands to: " ++ pr_located_qualid env (Term ref)) ++
     loc_info (TrueGlobal ref)])
 

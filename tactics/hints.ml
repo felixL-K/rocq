@@ -196,28 +196,7 @@ type 'a hints_transparency_target =
   | HintsProjections
   | HintsReferences of 'a list
 
-type import_level = HintLax | HintWarn | HintStrict
-
 let hint_as_term h = (h.hint_uctx, h.hint_term)
-
-let warn_hint_to_string = function
-| HintLax -> "Lax"
-| HintWarn -> "Warn"
-| HintStrict -> "Strict"
-
-let string_to_warn_hint = function
-| "Lax" -> HintLax
-| "Warn" -> HintWarn
-| "Strict" -> HintStrict
-| _ -> user_err Pp.(str "Only the following values are accepted: Lax, Warn, Strict.")
-
-let { Goptions.get = warn_hint } =
-  Goptions.declare_interpreted_string_option_and_ref
-    ~key:["Loose"; "Hint"; "Behavior"]
-    ~value:HintLax
-    string_to_warn_hint
-    warn_hint_to_string
-    ()
 
 let fresh_key =
   let id = Summary.ref ~name:"HINT-COUNTER" 0 in
@@ -232,7 +211,7 @@ let fresh_key =
     let lbl = Id.of_string_soft (Printf.sprintf "%s#%i"
       (ModPath.to_string mp) cur)
     in
-    KerName.make mp (Label.of_id lbl)
+    KerName.make mp lbl
 
 let pri_order_int (id1, {pri=pri1}) (id2, {pri=pri2}) =
   let d = Int.compare pri1 pri2 in
@@ -302,6 +281,7 @@ struct
   let build st data = ref (Build (st, data))
 
   let add0 env sigma st p v dn =
+    (* Feedback.msg_debug (let v1 = v in Pp.(str "add0: " ++ Pp.pr_opt Names.GlobRef.print (snd v1).name)); *)
     let p = match p with
     | ConstrPattern p -> Bnet.pattern env st p
     | SyntacticPattern p -> Bnet.pattern_syntactic env p
@@ -335,32 +315,32 @@ sig
   val empty : t
   val mem : KerName.t -> t -> bool
   val add : stored_data -> t -> t
-  val remove : GlobRef.Set.t -> t -> t
+  val remove : Environ.env -> GlobRef.Set_env.t -> t -> t
   val elements : t -> StoredSet.t
 end =
 struct
 
 type t = {
   data : StoredSet.t;
-  set : KNset.t;
+  set : KerName.Set.t;
 }
 
-let empty = { data = StoredSet.empty; set = KNset.empty }
+let empty = { data = StoredSet.empty; set = KerName.Set.empty }
 
-let mem kn sd = KNset.mem kn sd.set
+let mem kn sd = KerName.Set.mem kn sd.set
 
 let add t sd = {
   data = StoredSet.add t sd.data;
-  set = KNset.add (snd t).code.uid sd.set;
+  set = KerName.Set.add (snd t).code.uid sd.set;
 }
 
-let remove grs sd =
+let remove env grs sd =
   let fold ((_, h) as v) (accu, ans) =
     let keep = match h.name with
-    | Some gr -> not (GlobRef.Set.mem gr grs)
+    | Some gr -> not (GlobRef.Set_env.mem (Environ.QGlobRef.canonize env gr) grs)
     | None -> true
     in
-    if keep then (accu, StoredSet.add v ans) else (KNset.remove h.code.uid accu, ans)
+    if keep then (accu, StoredSet.add v ans) else (KerName.Set.remove h.code.uid accu, ans)
   in
   let set, data = StoredSet.fold fold sd.data (sd.set, StoredSet.empty) in
   if set == sd.set then sd
@@ -766,33 +746,33 @@ struct
 
   let add_one env sigma (k, v) db =
     let v = instantiate_hint env sigma v in
-    let st',db,rebuild =
-      match v.code.obj with
-      | Unfold_nth egr ->
-          let addunf ts (ids, csts, prjs) =
-            let open TransparentState in
-            match egr with
-            | Evaluable.EvalVarRef id ->
-              { ts with tr_var = Id.Pred.add id ts.tr_var }, (Id.Set.add id ids, csts, prjs)
-            | Evaluable.EvalConstRef cst ->
-              { ts with tr_cst = Cpred.add cst ts.tr_cst }, (ids, Cset.add cst csts, prjs)
-            | Evaluable.EvalProjectionRef p ->
-              { ts with tr_prj = PRpred.add p ts.tr_prj }, (ids, csts, PRset.add p prjs)
-          in
-          let state, unfs = addunf db.hintdb_state db.hintdb_unfolds in
-            state, { db with hintdb_unfolds = unfs }, true
-      | _ -> db.hintdb_state, db, false
+    let db = match v.code.obj with
+    | Unfold_nth egr ->
+      let open TransparentState in
+      let ts = db.hintdb_state in
+      let (ids, csts, prjs) = db.hintdb_unfolds in
+      let state, unfs = match egr with
+      | Evaluable.EvalVarRef id ->
+        { ts with tr_var = Id.Pred.add id ts.tr_var }, (Id.Set.add id ids, csts, prjs)
+      | Evaluable.EvalConstRef cst ->
+        { ts with tr_cst = Cpred.add cst ts.tr_cst }, (ids, Cset.add cst csts, prjs)
+      | Evaluable.EvalProjectionRef p ->
+        { ts with tr_prj = PRpred.add p ts.tr_prj }, (ids, csts, PRset.add p prjs)
+      in
+      let db = { db with hintdb_unfolds = unfs } in
+      if db.use_dn then rebuild_db state db else db
+    | _ -> db
     in
-    let db = if db.use_dn && rebuild then rebuild_db st' db else db in
     let db, id = next_hint_id db in
     addkv k id v db
 
   let add_list env sigma l db = List.fold_left (fun db k -> add_one env sigma k db) db l
 
-  let remove st grs se =
-    let grs = List.fold_left (fun accu gr -> GlobRef.Set.add gr accu) GlobRef.Set.empty grs in
-    let nopat = StoredData.remove grs se.sentry_nopat in
-    let pat = StoredData.remove grs se.sentry_pat in
+  let remove env st grs se =
+    let fold accu gr = GlobRef.Set_env.add (Environ.QGlobRef.canonize env gr) accu in
+    let grs = List.fold_left fold GlobRef.Set_env.empty grs in
+    let nopat = StoredData.remove env grs se.sentry_nopat in
+    let pat = StoredData.remove env grs se.sentry_pat in
     if pat == se.sentry_pat && nopat == se.sentry_nopat then se
     else
       let se = { se with sentry_nopat = nopat; sentry_pat = pat } in
@@ -802,7 +782,7 @@ struct
     let eq gr1 gr2 = QGlobRef.equal env gr1 gr2 in
     let filter (_, h) =
       match h.name with Some gr -> not (List.mem_f eq gr grs) | None -> true in
-    let hintmap = GlobRef.Map.map (fun e -> remove (dn_ts db) grs e) db.hintdb_map in
+    let hintmap = GlobRef.Map.map (fun e -> remove env (dn_ts db) grs e) db.hintdb_map in
     let hintnopat = List.filter filter db.hintdb_nopat in
       { db with hintdb_map = hintmap; hintdb_nopat = hintnopat }
 
@@ -859,11 +839,15 @@ module Hintdbmap = String.Map
 type hint_db = Hint_db.t
 
 let searchtable = Summary.ref ~name:"searchtable" Hintdbmap.empty
-let statustable = Summary.ref ~name:"statustable" KNmap.empty
 
 let searchtable_map name =
   Hintdbmap.find name !searchtable
-let searchtable_add (name,db) =
+let searchtable_add (name, db) =
+  (* XXX see #21114 *)
+(*   let () = assert (Hintdbmap.mem name !searchtable) in *)
+  searchtable := Hintdbmap.add name db !searchtable
+let searchtable_create (name, db) =
+(*   let () = assert (not @@ Hintdbmap.mem name !searchtable) in *)
   searchtable := Hintdbmap.add name db !searchtable
 let current_db_names () = Hintdbmap.domain !searchtable
 let current_db () = Hintdbmap.bindings !searchtable
@@ -1039,8 +1023,8 @@ let make_mode ref m =
     else m'
 
 let make_trivial env sigma r =
-  let name = name_of_hint r in
-  let c,ctx = fresh_global_or_constr env sigma r in
+  let name = Some r in
+  let c,ctx = fresh_global_or_constr env sigma (IsGlobRef r) in
   let sigma = merge_context_set_opt sigma ctx in
   let t = hnf_constr env sigma (Retyping.get_type_of env sigma c) in
   let hd = head_constr sigma t in
@@ -1067,19 +1051,11 @@ let get_db dbname =
   with Not_found -> Hint_db.empty ~name:dbname TransparentState.empty false
 
 let add_hint dbname hintlist =
-  let check (_, h) =
-    let () = if KNmap.mem h.code.uid !statustable then
-      user_err Pp.(str "Conflicting hint keys. This can happen when including \
-      twice the same module.")
-    in
-    statustable := KNmap.add h.code.uid false !statustable
-  in
-  let () = List.iter check hintlist in
   let db = get_db dbname in
   let env = Global.env () in
   let sigma = Evd.from_env env in
   let db' = Hint_db.add_list env sigma hintlist db in
-    searchtable_add (dbname,db')
+  searchtable_add (dbname, db')
 
 let add_transparency dbname target b =
   let open TransparentState in
@@ -1097,24 +1073,25 @@ let add_transparency dbname target b =
         | Evaluable.EvalVarRef v -> { st with tr_var = (if b then Id.Pred.add else Id.Pred.remove) v st.tr_var }
         | Evaluable.EvalProjectionRef p -> { st with tr_prj = (if b then PRpred.add else PRpred.remove) p st.tr_prj } )
         st grs
-  in searchtable_add (dbname, Hint_db.set_transparent_state db st')
+  in
+  searchtable_add (dbname, Hint_db.set_transparent_state db st')
 
 let remove_hint dbname grs =
   let env = Global.env () in
   let db = get_db dbname in
   let db' = Hint_db.remove_list env grs db in
-    searchtable_add (dbname, db')
+  searchtable_add (dbname, db')
 
 let add_cut dbname path =
   let env = Global.env () in
   let db = get_db dbname in
   let db' = Hint_db.add_cut env path db in
-    searchtable_add (dbname, db')
+  searchtable_add (dbname, db')
 
 let add_mode dbname l m =
   let db = get_db dbname in
   let db' = Hint_db.add_mode l m db in
-    searchtable_add (dbname, db')
+  searchtable_add (dbname, db')
 
 type db_obj = {
   db_local : bool;
@@ -1130,7 +1107,7 @@ let warn_mismatch_create_hintdb = CWarnings.create ~name:"mismatched-hint-db" ~c
 
 let cache_db ({db_name=name; db_use_dn=b; db_ts=ts} as o) =
   match searchtable_map name with
-  | exception Not_found -> searchtable_add (name, Hint_db.empty ~name ts b)
+  | exception Not_found -> searchtable_create (name, Hint_db.empty ~name ts b)
   | db ->
     (* Explicit DBs start with full TS, implicit DBs start with empty TS
        This should probably be controllable in Create Hint Db,
@@ -1213,14 +1190,7 @@ let open_autohint h =
   let superglobal = superglobal h in
   match h.hint_action with
   | AddHints hints ->
-    let () =
-      if not superglobal then
-        (* Import-bound hints must be declared when not imported yet *)
-        let filter (_, h) = not @@ KNmap.mem h.code.uid !statustable in
-        add_hint h.hint_name (List.filter filter hints)
-    in
-    let add (_, hint) = statustable := KNmap.add hint.code.uid true !statustable in
-    List.iter add hints
+    if not superglobal then add_hint h.hint_name hints
   | AddCut paths ->
     if not superglobal then add_cut h.hint_name paths
   | AddTransparency { grefs; state } ->
@@ -1414,7 +1384,7 @@ let add_resolves env sigma clist ~locality dbnames =
     (fun dbname ->
       let r =
         List.flatten (List.map (fun (pri, hnf, gr) ->
-          make_resolves env sigma (true, hnf) pri ~check:true gr) clist)
+          make_resolves env sigma (true, hnf) pri ~check:true (IsGlobRef gr)) clist)
       in
       let check (_, hint) = match hint.code.obj with
       | ERes_pf { rhint_term = c; rhint_type = cty; rhint_uctx = ctx } ->
@@ -1493,8 +1463,8 @@ type hnf = bool
 type nonrec hint_info = hint_info
 
 type hints_entry =
-  | HintsResolveEntry of (hint_info * hnf * hint_term) list
-  | HintsImmediateEntry of hint_term list
+  | HintsResolveEntry of (hint_info * hnf * GlobRef.t) list
+  | HintsImmediateEntry of GlobRef.t list
   | HintsCutEntry of hints_path
   | HintsUnfoldEntry of Evaluable.t list
   | HintsTransparencyEntry of Evaluable.t hints_transparency_target * bool
@@ -1577,8 +1547,6 @@ let add_hints ~locality dbnames h =
   | HintsExternEntry (info, tacexp) ->
       add_externs info tacexp ~locality dbnames
 
-let hint_globref gr = IsGlobRef gr
-
 let warn_non_reference_hint_using =
   CWarnings.create ~name:"non-reference-hint-using" ~category:CWarnings.CoreCategories.deprecated
     Pp.(fun (env, sigma, c) -> str "Use of the non-reference term " ++ pr_leconstr_env env sigma c ++ str " in \"using\" clauses is deprecated")
@@ -1622,9 +1590,18 @@ let make_local_hint_db env sigma ?ts eapply lems =
   make_local_hint_db env sigma ts eapply lems
 
 let make_db_list dbnames =
-  let use_core = not (List.mem "nocore" dbnames) in
-  let dbnames = List.remove String.equal "nocore" dbnames in
-  let dbnames = if use_core then "core"::dbnames else dbnames in
+  let fold (core, nocore) db =
+    if String.equal db "core" then (true, nocore)
+    else if String.equal db "nocore" then (core, true)
+    else (core, nocore)
+  in
+  let has_core, has_nocore = List.fold_left fold (false, false) dbnames in
+  let dbnames = match has_core, has_nocore with
+  | true, true -> user_err Pp.(str "The core and nocore databases are mutually exclusive")
+  | true, false -> dbnames
+  | false, true -> List.remove String.equal "nocore" dbnames
+  | false, false -> "core" :: dbnames
+  in
   let lookup db =
     try searchtable_map db with Not_found -> error_no_such_hint_database db
   in
@@ -1802,90 +1779,6 @@ let pr_searchtable env sigma =
   in
   Hintdbmap.fold fold !searchtable (mt ())
 
-let print_mp mp =
-  try
-    let qid = Nametab.shortest_qualid_of_module mp in
-    str " from "  ++ pr_qualid qid
-  with Not_found -> mt ()
-
-let is_imported h = try KNmap.find h.uid !statustable with Not_found -> true
-
-let hint_trace = Evd.Store.field "hint_trace"
-
-let log_hint h =
-  let open Proofview.Notations in
-  Proofview.tclEVARMAP >>= fun sigma ->
-  let store = get_extra_data sigma in
-  match Store.get store hint_trace with
-  | None ->
-    (* All calls to hint logging should be well-scoped *)
-    assert false
-  | Some trace ->
-    let trace = KNmap.add h.uid h trace in
-    let store = Store.set store hint_trace trace in
-    Proofview.Unsafe.tclEVARS (set_extra_data store sigma)
-
-let warn_non_imported_hint =
-  CWarnings.create ~name:"non-imported-hint" ~category:CWarnings.CoreCategories.automation
-         (fun (hint,mp) ->
-          strbrk "Hint used but not imported: " ++ hint ++ print_mp mp)
-
-let warn env sigma h =
-  let hint = pr_hint env sigma h in
-  let mp = KerName.modpath h.uid in
-  warn_non_imported_hint (hint,mp)
-
-let wrap_hint_warning t =
-  let open Proofview.Notations in
-  Proofview.tclEVARMAP >>= fun sigma ->
-  let store = get_extra_data sigma in
-  let old = Store.get store hint_trace in
-  let store = Store.set store hint_trace KNmap.empty in
-  Proofview.Unsafe.tclEVARS (set_extra_data store sigma) >>= fun () ->
-  t >>= fun ans ->
-  Proofview.tclENV >>= fun env ->
-  Proofview.tclEVARMAP >>= fun sigma ->
-  let store = get_extra_data sigma in
-  let hints = match Store.get store hint_trace with
-  | None -> assert false
-  | Some hints -> hints
-  in
-  let () = KNmap.iter (fun _ h -> warn env sigma h) hints in
-  let store = match old with
-  | None -> Store.remove store hint_trace
-  | Some v -> Store.set store hint_trace v
-  in
-  Proofview.Unsafe.tclEVARS (set_extra_data store sigma) >>= fun () ->
-  Proofview.tclUNIT ans
-
-let wrap_hint_warning_fun env sigma t =
-  let store = get_extra_data sigma in
-  let old = Store.get store hint_trace in
-  let store = Store.set store hint_trace KNmap.empty in
-  let (ans, sigma) = t (set_extra_data store sigma) in
-  let store = get_extra_data sigma in
-  let hints = match Store.get store hint_trace with
-  | None -> assert false
-  | Some hints -> hints
-  in
-  let () = KNmap.iter (fun _ h -> warn env sigma h) hints in
-  let store = match old with
-  | None -> Store.remove store hint_trace
-  | Some v -> Store.set store hint_trace v
-  in
-  (ans, set_extra_data store sigma)
-
-let run_hint tac k = match warn_hint () with
-| HintLax -> k tac.obj
-| HintWarn ->
-  if is_imported tac then k tac.obj
-  else Proofview.tclTHEN (log_hint tac) (k tac.obj)
-| HintStrict ->
-  if is_imported tac then k tac.obj
-  else
-    let info = Exninfo.reify () in
-    Proofview.tclZERO ~info (UserError (str "Tactic failure."))
-
 module FullHint =
 struct
   type t = full_hint
@@ -1895,7 +1788,7 @@ struct
   | None -> None
   | Some (ConstrPattern p | SyntacticPattern p) -> Some p
   | Some DefaultPattern -> None
-  let run (h : t) k = run_hint h.code k
+  let run (h : t) k = k h.code.obj
   let print env sigma (h : t) = pr_hint env sigma h.code
   let name (h : t) = h.name
 

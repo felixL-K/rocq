@@ -131,12 +131,10 @@ let is_traced () =
 
 (** More naming applications *)
 let name_vfun appl vle =
-  if is_traced () then
-    match to_tacvalue vle with
-    | Some (VFun (appl0,trace,loc,lfun,vars,t)) ->
-      of_tacvalue (VFun (combine_appl appl0 appl,trace,loc,lfun,vars,t))
-    | Some (VRec _) | None -> vle
-  else vle
+  match to_tacvalue vle with
+  | Some (VFun (appl0,trace,loc,lfun,vars,t)) ->
+    of_tacvalue (VFun (combine_appl appl0 appl,trace,loc,lfun,vars,t))
+  | Some (VRec _) | None -> vle
 
 module TacStore = Geninterp.TacStore
 
@@ -623,8 +621,7 @@ let constr_flags () = {
   expand_evars = true;
   program_mode = false;
   polymorphic = false;
-  undeclared_evars_patvars = false;
-  patvars_abstract = false;
+  undeclared_evars_rr = false;
   unconstrained_sorts = false;
 }
 
@@ -645,8 +642,7 @@ let open_constr_use_classes_flags () = {
   expand_evars = false;
   program_mode = false;
   polymorphic = false;
-  undeclared_evars_patvars = false;
-  patvars_abstract = false;
+  undeclared_evars_rr = false;
   unconstrained_sorts = false;
 }
 
@@ -658,8 +654,7 @@ let open_constr_no_classes_flags () = {
   expand_evars = false;
   program_mode = false;
   polymorphic = false;
-  undeclared_evars_patvars = false;
-  patvars_abstract = false;
+  undeclared_evars_rr = false;
   unconstrained_sorts = false;
 }
 
@@ -671,8 +666,7 @@ let pure_open_constr_flags = {
   expand_evars = false;
   program_mode = false;
   polymorphic = false;
-  undeclared_evars_patvars = false;
-  patvars_abstract = false;
+  undeclared_evars_rr = false;
   unconstrained_sorts = false;
 }
 
@@ -1027,12 +1021,20 @@ let head_with_value (lvar,lval) =
   in
   head_with_value_rec [] (lvar,lval)
 
-let eval_pattern lfun ist env sigma (bvars, _, pat) =
-  (bvars,Constr_matching.instantiate_pattern env sigma lfun pat)
+let eval_pattern ist env sigma (bvars, _, pat) =
+  let closure = extract_ltac_constr_context ist env sigma in
+  let lvars = {
+    ltac_constrs = closure.typed;
+    ltac_uconstrs = closure.untyped;
+    ltac_idents = closure.idents;
+    ltac_genargs = closure.genargs;
+  }
+  in
+  (bvars, Patternops.interp_pattern env sigma lvars pat)
 
-let read_pattern lfun ist env sigma = function
-  | Subterm (ido,c) -> Subterm (ido,eval_pattern lfun ist env sigma c)
-  | Term c -> Term (eval_pattern lfun ist env sigma c)
+let read_pattern ist env sigma = function
+  | Subterm (ido,c) -> Subterm (ido,eval_pattern ist env sigma c)
+  | Term c -> Term (eval_pattern ist env sigma c)
 
 (* Reads the hypotheses of a Match Context rule *)
 let cons_and_check_name id l =
@@ -1042,23 +1044,23 @@ let cons_and_check_name id l =
       str " used twice in the same pattern.")
   else id::l
 
-let rec read_match_goal_hyps lfun ist env sigma lidh = function
+let rec read_match_goal_hyps ist env sigma lidh = function
   | (Hyp ({loc;v=na} as locna,mp))::tl ->
       let lidh' = Name.fold_right cons_and_check_name na lidh in
-      Hyp (locna,read_pattern lfun ist env sigma mp)::
-        (read_match_goal_hyps lfun ist env sigma lidh' tl)
+      Hyp (locna,read_pattern ist env sigma mp)::
+        (read_match_goal_hyps ist env sigma lidh' tl)
   | (Def ({loc;v=na} as locna,mv,mp))::tl ->
       let lidh' = Name.fold_right cons_and_check_name na lidh in
-      Def (locna,read_pattern lfun ist env sigma mv, read_pattern lfun ist env sigma mp)::
-        (read_match_goal_hyps lfun ist env sigma lidh' tl)
+      Def (locna,read_pattern ist env sigma mv, read_pattern ist env sigma mp)::
+        (read_match_goal_hyps ist env sigma lidh' tl)
   | [] -> []
 
 (* Reads the rules of a Match Context or a Match *)
-let rec read_match_rule lfun ist env sigma = function
-  | (All tc)::tl -> (All tc)::(read_match_rule lfun ist env sigma tl)
+let rec read_match_rule ist env sigma = function
+  | (All tc)::tl -> (All tc)::(read_match_rule ist env sigma tl)
   | (Pat (rl,mp,tc))::tl ->
-      Pat (read_match_goal_hyps lfun ist env sigma [] rl, read_pattern lfun ist env sigma mp,tc)
-      :: read_match_rule lfun ist env sigma tl
+      Pat (read_match_goal_hyps ist env sigma [] rl, read_pattern ist env sigma mp,tc)
+      :: read_match_rule ist env sigma tl
   | [] -> []
 
 (* Fully evaluate an untyped constr *)
@@ -1522,7 +1524,7 @@ and interp_match ist lz constr lmr =
   Ftactic.enter begin fun gl ->
     let sigma = project gl in
     let env = Proofview.Goal.env gl in
-    let ilr = read_match_rule (extract_ltac_constr_values ist env) ist env sigma lmr in
+    let ilr = read_match_rule ist env sigma lmr in
     interp_match_successes lz ist (Tactic_matching.match_term env sigma constr ilr)
   end
 
@@ -1534,7 +1536,7 @@ and interp_match_goal ist lz lr lmr =
       let hyps = Proofview.Goal.hyps gl in
       let hyps = if lr then List.rev hyps else hyps in
       let concl = Proofview.Goal.concl gl in
-      let ilr = read_match_rule (extract_ltac_constr_values ist env) ist env sigma lmr in
+      let ilr = read_match_rule ist env sigma lmr in
       interp_match_successes lz ist (Tactic_matching.match_goal env sigma hyps concl ilr)
     end
 
@@ -1716,7 +1718,7 @@ and interp_atomic ist tac : unit Proofview.tactic =
           Evd.MonadR.List.map_right (fun c sigma -> f sigma c) l (project gl)
         in
         Tacticals.tclTHEN (Proofview.Unsafe.tclEVARS sigma)
-        (Tactics.mutual_fix (interp_ident ist env sigma id) n l_interp 0)
+        (FixTactics.mutual_fix (interp_ident ist env sigma id) n l_interp)
       end
       end
   | TacMutualCofix (id,l) ->
@@ -1731,7 +1733,7 @@ and interp_atomic ist tac : unit Proofview.tactic =
           Evd.MonadR.List.map_right (fun c sigma -> f sigma c) l (project gl)
         in
         Tacticals.tclTHEN (Proofview.Unsafe.tclEVARS sigma)
-        (Tactics.mutual_cofix (interp_ident ist env sigma id) l_interp 0)
+        (FixTactics.mutual_cofix (interp_ident ist env sigma id) l_interp)
       end
       end
   | TacAssert (ev,b,t,ipat,c) ->

@@ -25,7 +25,7 @@ accepted by the Rocq parser, but the grammar has been edited
 to improve readability and presentation.
 
 In the grammar presented in this manual, the terminal symbols are
-black (e.g. :n:`forall`), whereas the nonterminals are green, italic
+black (e.g. :n:`forall`), whereas the nonterminals are orange, italic
 and hyperlinked (e.g. :n:`@term`).  Some syntax is represented
 graphically using the following kinds of blocks:
 
@@ -357,6 +357,8 @@ rest of the Rocq Prover manual: :term:`terms <term>` and :term:`types
      :n:`@ltac_expr` syntax supports both simple and compound
      :term:`tactics <tactic>`.  For example: ``split`` is a simple
      tactic while ``split; auto`` combines two simple tactics.
+
+     For more information, see :ref:`compil-steps`.
 
    command
 

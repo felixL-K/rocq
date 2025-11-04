@@ -87,6 +87,8 @@ module PluginSpec : sig
 
   val to_package : t -> string
 
+  val is_loaded : t -> bool
+
   (* Load a plugin, low-level, that is to say, will directly call the
      loading mechanism in OCaml/findlib *)
   val load : t -> unit
@@ -169,6 +171,8 @@ end = struct
 
   let to_package { lib } = lib
 
+  let is_loaded { lib } = Findlib.is_recorded_package lib
+
   let load = function
     | { lib } ->
       if Findlib.is_recorded_package lib then
@@ -199,8 +203,8 @@ end = struct
     dbg_dynlink Pp.(fun () ->
         str "for " ++ prlist_with_sep spc (fun {lib} -> str lib) plugins ++
         str ":" ++ fnl() ++
-        str "all deps " ++ prlist_with_sep spc str allplugins ++ fnl() ++
-        str "filtered " ++ prlist_with_sep spc (fun (_,{lib}) -> str lib) deps);
+        v 2 (str "all deps:" ++ spc() ++ prlist_with_sep spc str allplugins) ++ fnl() ++
+        v 2 (str "filtered deps:" ++ spc() ++ prlist_with_sep spc (fun (_,{lib}) -> str lib) deps));
     deps
 
   let digest s =
@@ -277,26 +281,6 @@ let add_ml_dir s =
     | WithoutTop when has_dynlink -> ()
     | _ -> ()
 
-(** Is the ML code of the standard library placed into loadable plugins
-    or statically compiled into rocq repl ? For the moment this choice is
-    made according to the presence of native dynlink : even if bytecode
-    rocq repl could always load plugins, we prefer to have uniformity between
-    bytecode and native versions. *)
-
-(* [known_loaded_module] contains the names of the loaded ML modules
- * (linked or loaded with load_object). It is used not to load a
- * module twice. It is NOT the list of ML modules Rocq knows. *)
-
-(* TODO: Merge known_loaded_module and known_loaded_plugins *)
-let known_loaded_modules : PluginSpec.Set.t ref = ref PluginSpec.Set.empty
-
-let add_known_module mname =
-  if not (PluginSpec.Set.mem mname !known_loaded_modules) then
-    known_loaded_modules := PluginSpec.Set.add mname !known_loaded_modules
-
-let module_is_known mname = PluginSpec.Set.mem mname !known_loaded_modules
-let plugin_is_known mname = PluginSpec.Set.mem mname !known_loaded_modules
-
 (** Init time functions *)
 
 let initialized_plugins = Summary.ref ~stage:Synterp ~name:"inited-plugins" PluginSpec.Set.empty
@@ -315,18 +299,36 @@ let add_init_function name f =
 (** Registering functions to be used at caching time, that is when the Declare
     ML module command is issued. *)
 
+type cache_obj = CacheObj : { synterp : unit -> 'a; interp : 'a -> unit } -> cache_obj
+
+let interp_only_obj interp = CacheObj { synterp = (fun () -> ()); interp }
+
 let cache_objs = ref PluginSpec.Map.empty
 
-let declare_cache_obj f name =
+let declare_cache_obj_full obj name =
   let name = PluginSpec.of_package name in
   let objs = try PluginSpec.Map.find name !cache_objs with Not_found -> [] in
-  let objs = f :: objs in
+  let objs = obj :: objs in
   cache_objs := PluginSpec.Map.add name objs !cache_objs
+
+let declare_cache_obj f name =
+  declare_cache_obj_full (CacheObj {synterp = f; interp = (fun () -> ()) }) name
+
+(* A little box to avoid getting confused with partially applied functions *)
+type interp_fun = InterpFun of (unit -> unit)
+
+let iter_interp_funs l =
+  InterpFun (fun () -> List.iter (fun (InterpFun f) -> f ()) l)
 
 let perform_cache_obj name =
   let objs = try PluginSpec.Map.find name !cache_objs with Not_found -> [] in
   let objs = List.rev objs in
-  List.iter (fun f -> f ()) objs
+  let v = List.map (fun (CacheObj {synterp; interp}) ->
+      let v = synterp () in
+      InterpFun (fun () -> interp v))
+      objs
+  in
+  iter_interp_funs v
 
 (** ml object = ml module or plugin *)
 let dinit = CDebug.create ~name:"mltop-init" ()
@@ -345,16 +347,7 @@ let init_ml_object mname =
   end
 
 let load_ml_object mname =
-  ml_load mname;
-  add_known_module mname
-
-let add_known_module name =
-  let name = PluginSpec.of_package name in
-  add_known_module name
-
-let module_is_known mname =
-  let mname = PluginSpec.of_package mname in
-  module_is_known mname
+  ml_load mname
 
 (* Summary of declared ML Modules *)
 
@@ -396,7 +389,7 @@ let if_verbose_load req f name =
 
 let trigger_ml_object req plugin =
   let () =
-    if not @@ plugin_is_known plugin then begin
+    if not @@ PluginSpec.is_loaded plugin then begin
       if not has_dynlink then
         CErrors.user_err
           (str "Dynamic link not supported (module " ++ str (PluginSpec.pp plugin) ++ str ").")
@@ -431,14 +424,17 @@ type ml_module_object =
   }
 
 let cache_ml_objects mnames =
-  let iter (implicit,obj) =
+  let map (implicit,obj) =
     trigger_ml_object (Regular {implicit}) obj;
-    if not implicit then begin
+    if implicit then None else begin
       init_ml_object obj;
-      perform_cache_obj obj
+      Some (perform_cache_obj obj)
     end
   in
-  List.iter iter mnames
+  let v = List.filter_map map mnames in
+  iter_interp_funs v
+
+let run_interp_fun (InterpFun f) = f ()
 
 let load_ml_objects _ {mnames; _} =
   let iter (implicit,obj) =

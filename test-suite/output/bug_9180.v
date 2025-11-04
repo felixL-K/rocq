@@ -1,6 +1,6 @@
-Notation succn := (Datatypes.S).
+Abbreviation succn := (Datatypes.S).
 
-Notation "n .+1" := (succn n) (at level 2, left associativity,
+Notation "n .+1" := (succn n) (at level 1, left associativity,
   format "n .+1") : nat_scope.
 
 Locate ".+1".

@@ -118,7 +118,7 @@ The tactics in this section implement case
 analysis on inductive or coinductive objects (see :ref:`variants`).
 
 .. comment Notes contrasting the various case analysis tactics:
-   https://github.com/coq/coq/pull/14676#discussion_r697904963
+   https://github.com/rocq-prover/rocq/pull/14676#discussion_r697904963
 
 .. tacn:: destruct {+, @induction_clause } {? @induction_principle }
 
@@ -281,16 +281,6 @@ analysis on inductive or coinductive objects (see :ref:`variants`).
       like :g:`and` and :g:`exists` and those defined with the :cmd:`Record`
       command.
 
-.. tacn:: destauto {? in @ident }
-
-   .. todo: keep or remove destauto?
-      destauto added in https://github.com/coq/coq/commit/f3a53027589813ff19b3a7c46d84e5bd2fc65741
-
-   Reduces one :n:`match t with ...` by doing :n:`destruct t`.  If :n:`t` is
-   not a variable, the tactic does
-   :n:`case_eq t;intros ... heq;rewrite heq in *|-`.
-   :n:`heq` is preserved.
-
 Induction
 ---------
 
@@ -326,9 +316,25 @@ Induction
      into the induction principle.  The number of :n:`@bindings`
      must be the same as the number of parameters of the induction principle.
 
-     If unspecified, the tactic applies the appropriate :term:`induction principle`
-     that was automatically generated when the inductive type was declared based
-     on the sort of the goal.
+     If unspecified, the tactic finds the appropriate :term:`induction principle`
+     using the "scheme" registration. The scheme kind depends on the sort of the goal:
+     `sind` for `SProp`, `ind` for `Prop`, `rec` for `Set` and `rect` for `Type`.
+     It also has a `_dep` or `_nodep` suffix indicating whether it is dependent in the eliminated value
+     (i.e. in :cmd:`Scheme`, `Induction` is `_dep` and `Minimality` is `_nodep`).
+     When both `_dep` and `_nodep` schemes are registered for the eliminated inductive and goal sort,
+     the `_dep` scheme is used unless the inductive type was explicitly declared
+     in `Prop`.
+
+     Automatically generated schemes and schemes produced by
+     :cmd:`Scheme` are automatically registered. Constants may also be
+     registered using :cmd:`Register Scheme`, e.g. `Register Scheme
+     my_foo_elim as rect_dep for foo` where `my_foo_elim` is a
+     dependent elimination scheme for inductive `foo` at sort `Type`.
+
+     If no scheme is registered for the eliminated inductive and goal
+     sort, :tacn:`induction` attempts to find a constant from the same
+     module as the inductive whose name is the inductive's name
+     suffixed by `sind` / `ind` / `rec` / `rect`. This name-based lookup is deprecated.
 
    .. exn:: Cannot recognize a statement based on @reference.
 
@@ -367,11 +373,13 @@ Induction
 
    .. example:: :n:`induction` with :n:`@occurrences`
 
+      `induction in` is useful to generalize over other variables:
+
       .. rocqtop:: reset all
 
-         Lemma induction_test2 : forall n:nat, n = n -> n <= n.
-         intros.
-         induction n in H |-.
+         Lemma induction_test2 : forall n m:nat, n = m -> n <= m.
+         intros n m H.
+         induction n in m, H |- *.
          Show 2.
 
    .. tacn:: einduction {+, @induction_clause } {? @induction_principle }
@@ -785,7 +793,7 @@ This section describes some special purpose tactics to work with
    .. comment: the other inversion* tactics don't support the using clause,
       but they should be able to, if desired.  It wouldn't make sense for
       inversion_sigma.
-      See https://github.com/coq/coq/pull/14179#discussion_r642193096
+      See https://github.com/rocq-prover/rocq/pull/14179#discussion_r642193096
 
    For a hypothesis whose type is a (co)inductively defined
    proposition, the tactic introduces a goal for each constructor
@@ -980,7 +988,7 @@ This section describes some special purpose tactics to work with
 
    As :g:`H` occurs in the goal, we may want to reason by cases on its
    structure and so, we would like inversion tactics to substitute :g:`H` by
-   the corresponding @term in constructor form. Neither :tacn:`inversion` nor
+   the corresponding term in constructor form. Neither :tacn:`inversion` nor
    :tacn:`inversion_clear` do such a substitution. To have such a behavior we
    use the dependent inversion tactics:
 
@@ -1118,7 +1126,7 @@ Generation of induction principles with ``Scheme``
       | Type
 
    Generates :term:`induction principles <induction principle>` with given
-   :n:`scheme_type`\s and :n:`scheme_sort`\s for an inductive type. In the case
+   :n:`scheme_type`\s and :n:`sort_quality_or_set`\s for an inductive type. In the case
    where the inductive definition is a mutual inductive definition, the
    :n:`with` clause is used to generate a mutually recursive inductive scheme
    for each clause of the mutual inductive type.
@@ -1140,6 +1148,10 @@ Generation of induction principles with ``Scheme``
    =================== =========== ===========
 
    See examples of the :n:`@scheme_type`\s :ref:`here <scheme_example>`.
+
+   Unless attribute `register=no` is used, the scheme is automatically
+   registered for use by tactics (for instance :tacn:`induction` uses
+   `Induction` schemes). Use :cmd:`Register Scheme` to manually register a scheme.
 
 .. cmd:: Scheme {? Boolean } Equality for @reference
    :name: Scheme Equality; Scheme Boolean Equality
@@ -1348,10 +1360,10 @@ Generation of inversion principles with ``Derive`` ``Inversion``
    Generates an inversion lemma for the
    :tacn:`inversion` tactic.  :token:`ident` is the name
    of the generated lemma.  :token:`one_term` should be in the form
-   :token:`qualid` or :n:`(forall {+ @binder }, @qualid @term)` where
+   :token:`qualid` or :n:`(forall {+ @binder }, @qualid {+ @one_term })` where
    :token:`qualid` is the name of an inductive
-   predicate and :n:`{+ @binder }` binds the variables occurring in the term
-   :token:`term`. The lemma is generated for the sort
+   predicate and :n:`{+ @binder }` binds the variables occurring in
+   :n:`{+ @one_term }`. The lemma is generated for the sort
    :token:`sort_quality_or_set` corresponding to :token:`one_term`.
    Applying the lemma is equivalent to inverting the instance with the
    :tacn:`inversion` tactic.
@@ -1682,11 +1694,11 @@ must help the automation by giving some arguments, using the
 
 .. rocqtop:: in extra-stdlib
 
-   destruct D... apply weak; apply ax. apply ax.
+   destruct D; simpl in * ; simpl_depind ; auto. apply weak; apply ax. apply ax.
 
 .. rocqtop:: in extra-stdlib
 
-   destruct D...
+   destruct D; simpl in * ; simpl_depind ; auto.
 
 .. rocqtop:: all extra-stdlib
 

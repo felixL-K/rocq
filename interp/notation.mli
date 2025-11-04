@@ -14,6 +14,7 @@ open Constrexpr
 open Glob_term
 open Notation_term
 open Notationextern
+open Globnames
 
 (** Notations *)
 
@@ -84,118 +85,11 @@ type notation_location = (DirPath.t * DirPath.t) * string
 *)
 
 type required_module = full_path * string list
-type rawnum = NumTok.Signed.t
-
-(** The unique id string below will be used to refer to a particular
-    registered interpreter/uninterpreter of number or string notation.
-    Using the same uid for different (un)interpreters will fail.
-    If at most one interpretation of prim token is used per scope,
-    then the scope name could be used as unique id. *)
-
-type prim_token_uid = string
-
-type 'a prim_token_interpreter = ?loc:Loc.t -> 'a -> glob_constr
-type 'a prim_token_uninterpreter = any_glob_constr -> 'a option
-
-type 'a prim_token_interpretation =
-  'a prim_token_interpreter * 'a prim_token_uninterpreter
-
-val register_rawnumeral_interpretation :
-  ?allow_overwrite:bool -> prim_token_uid -> rawnum prim_token_interpretation -> unit
-
-val register_bignumeral_interpretation :
-  ?allow_overwrite:bool -> prim_token_uid -> Z.t prim_token_interpretation -> unit
-
-val register_string_interpretation :
-  ?allow_overwrite:bool -> prim_token_uid -> string prim_token_interpretation -> unit
-
-(** * Number notation *)
-
-type prim_token_notation_error =
-  | UnexpectedTerm of Constr.t
-  | UnexpectedNonOptionTerm of Constr.t
-
-exception PrimTokenNotationError of string * Environ.env * Evd.evar_map * prim_token_notation_error
-
-type numnot_option =
-  | Nop
-  | Warning of NumTok.UnsignedNat.t
-  | Abstract of NumTok.UnsignedNat.t
-
-type int_ty =
-  { dec_uint : Names.inductive;
-    dec_int : Names.inductive;
-    hex_uint : Names.inductive;
-    hex_int : Names.inductive;
-    uint : Names.inductive;
-    int : Names.inductive }
-
-type z_pos_ty =
-  { z_ty : Names.inductive;
-    pos_ty : Names.inductive }
-
-type number_ty =
-  { int : int_ty;
-    decimal : Names.inductive;
-    hexadecimal : Names.inductive;
-    number : Names.inductive }
-
-type pos_neg_int63_ty =
-  { pos_neg_int63_ty : Names.inductive }
-
-type target_kind =
-  | Int of int_ty (* Corelib.Init.Number.int + uint *)
-  | UInt of int_ty (* Corelib.Init.Number.uint *)
-  | Z of z_pos_ty (* Corelib.Numbers.BinNums.Z and positive *)
-  | Int63 of pos_neg_int63_ty (* Corelib.Numbers.Cyclic.Int63.PrimInt63.pos_neg_int63 *)
-  | Float64 (* Corelib.Floats.PrimFloat.float *)
-  | Number of number_ty (* Corelib.Init.Number.number + uint + int *)
-
-type string_target_kind =
-  | ListByte
-  | Byte
-  | PString
-
-type option_kind = Option | Direct
-type 'target conversion_kind = 'target * option_kind
-
-(** A postprocessing translation [to_post] can be done after execution
-   of the [to_ty] interpreter. The reverse translation is performed
-   before the [of_ty] uninterpreter.
-
-   [to_post] is an array of [n] lists [l_i] of tuples [(f, t,
-   args)]. When the head symbol of the translated term matches one of
-   the [f] in the list [l_0] it is replaced by [t] and its arguments
-   are translated acording to [args] where [ToPostCopy] means that the
-   argument is kept unchanged and [ToPostAs k] means that the
-   argument is recursively translated according to [l_k].
-   [ToPostHole] introduces an additional implicit argument hole
-   (in the reverse translation, the corresponding argument is removed).
-   [ToPostCheck r] behaves as [ToPostCopy] except in the reverse
-   translation which fails if the copied term is not [r].
-   When [n] is null, no translation is performed. *)
-type to_post_arg = ToPostCopy | ToPostAs of int | ToPostHole of Id.t | ToPostCheck of Constr.t
-type ('target, 'warning) prim_token_notation_obj =
-  { to_kind : 'target conversion_kind;
-    to_ty : GlobRef.t;
-    to_post : ((GlobRef.t * GlobRef.t * to_post_arg list) list) array;
-    of_kind : 'target conversion_kind;
-    of_ty : GlobRef.t;
-    ty_name : Libnames.qualid; (* for warnings / error messages *)
-    warning : 'warning }
-
-type number_notation_obj = (target_kind, numnot_option) prim_token_notation_obj
-type string_notation_obj = (string_target_kind, unit) prim_token_notation_obj
-
-type prim_token_interp_info =
-    Uid of prim_token_uid
-  | NumberNotation of number_notation_obj
-  | StringNotation of string_notation_obj
 
 type prim_token_infos = {
   pt_local : bool; (** Is this interpretation local? *)
   pt_scope : scope_name; (** Concerned scope *)
-  pt_interp_info : prim_token_interp_info; (** Unique id "pointing" to (un)interp functions, OR a number notation object describing (un)interp functions *)
+  pt_interp_info : PrimNotations.prim_token_interp_info; (** Unique id "pointing" to (un)interp functions, OR a number notation object describing (un)interp functions *)
   pt_required : required_module; (** Module that should be loaded first *)
   pt_refs : GlobRef.t list; (** Entry points during uninterpretation *)
   pt_in_match : bool (** Is this prim token legal in match patterns ? *)
@@ -236,8 +130,8 @@ val warning_overridden_name : string
 
 type entry_coercion_kind =
   | IsEntryCoercion of notation_entry_level * notation_entry_relative_level
-  | IsEntryGlobal of string * int
-  | IsEntryIdent of string * int
+  | IsEntryGlobal of CustomName.t * int
+  | IsEntryIdent of CustomName.t * int
 
 val declare_notation : notation_with_optional_scope * notation ->
   interpretation -> notation_location -> use:notation_use ->
@@ -294,7 +188,7 @@ val interp_notation_as_global_reference_expanded : ?loc:Loc.t -> head:bool ->
 val declare_arguments_scope :
   bool (** true=local *) -> GlobRef.t -> scope_name list list -> unit
 
-val find_arguments_scope : GlobRef.t -> scope_name list list
+val find_arguments_scope : Environ.env -> GlobRef.t -> scope_name list list
 
 type scope_class
 
@@ -338,8 +232,7 @@ type notation_symbols = {
   symbols : symbol list; (* the decomposition of the notation into terminals and nonterminals *)
 }
 
-val is_prim_token_constant_in_constr :
-  notation_entry * symbol list -> bool
+val is_prim_token_constant_in_constr : notation_entry * symbol list -> bool
 
 (** Decompose a notation of the form "a 'U' b" together with the lists
     of pairs of recursive variables and the list of all variables
@@ -371,8 +264,8 @@ val availability_of_entry_coercion : ?non_included:bool -> notation_entry_relati
 
 (** Special properties of entries *)
 
-val declare_custom_entry_has_global : string -> int -> unit
-val declare_custom_entry_has_ident : string -> int -> unit
+val declare_custom_entry_has_global : CustomName.t -> int -> unit
+val declare_custom_entry_has_ident : CustomName.t -> int -> unit
 
 val entry_has_global : notation_entry_relative_level -> bool
 val entry_has_ident : notation_entry_relative_level -> bool
@@ -391,6 +284,3 @@ val level_of_notation : notation -> level
 (** Rem: printing rules for primitive token are canonical *)
 
 val with_notation_protection : ('a -> 'b) -> 'a -> 'b
-
-(** Conversion from bigint to int63 *)
-val int63_of_pos_bigint : Z.t -> Uint63.t

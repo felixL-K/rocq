@@ -24,6 +24,7 @@ type global_data = {
   gdata_type : type_scheme;
   gdata_mutable : bool;
   gdata_deprecation : Deprecation.t option;
+  gdata_mutation_history : ModPath.t list;
 }
 
 val define_global : ltac_constant -> global_data -> unit
@@ -36,7 +37,7 @@ type compile_info = {
 val set_compiled_global : ltac_constant -> compile_info -> valexpr -> unit
 val get_compiled_global : ltac_constant -> (compile_info * valexpr) option
 
-val globals : unit -> global_data KNmap.t
+val globals : unit -> global_data KerName.Map.t
 
 (** {5 Toplevel definition of types} *)
 
@@ -59,10 +60,10 @@ type constructor_data = {
       constructor is a member of an open type. *)
 }
 
-val define_constructor : ?warn:UserWarn.t -> ltac_constructor -> constructor_data -> unit
+val define_constructor : ltac_constructor -> constructor_data -> unit
 val interp_constructor : ltac_constructor -> constructor_data
 
-val find_all_constructors_in_type : type_constant -> constructor_data KNmap.t
+val find_all_constructors_in_type : type_constant -> constructor_data KerName.Map.t
 (** Useful for printing info about currently defined constructors of open types. *)
 
 (** {5 Toplevel definition of projections} *)
@@ -113,17 +114,14 @@ val interp_notation : ltac_notation -> notation_data
 val push_ltac : visibility -> full_path -> tacref -> unit
 val locate_ltac : qualid -> tacref
 val locate_extended_all_ltac : qualid -> tacref list
-val shortest_qualid_of_ltac : Id.Set.t -> tacref -> qualid
+val shortest_qualid_of_ltac : ?loc:Loc.t -> Id.Set.t -> tacref -> qualid
 val path_of_ltac : tacref -> full_path
 
-val push_constructor : visibility -> full_path -> ltac_constructor -> unit
+val push_constructor : ?user_warns:UserWarn.t -> visibility -> full_path -> ltac_constructor -> unit
 val locate_constructor : qualid -> ltac_constructor
 val locate_extended_all_constructor : qualid -> ltac_constructor list
 val shortest_qualid_of_constructor : ltac_constructor -> qualid
 val path_of_constructor : ltac_constructor -> full_path
-
-(** Emit warning if any for the constructor. *)
-val constructor_user_warn : ?loc:Loc.t -> ltac_constructor -> unit
 
 val push_type : visibility -> full_path -> type_constant -> unit
 val locate_type : qualid -> type_constant
@@ -193,6 +191,7 @@ type var_quotation_kind =
   | ConstrVar
   | PretermVar
   | PatternVar
+  | HypVar
 
 val wit_ltac2_var_quotation : (lident option * lident, var_quotation_kind * Id.t, Util.Empty.t) genarg_type
 (** Ltac2 quotations for variables "$x" or "$kind:foo" in Gallina terms.

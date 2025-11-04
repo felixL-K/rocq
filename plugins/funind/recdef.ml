@@ -69,7 +69,7 @@ let def_of_const t =
     with Not_found ->
       anomaly
         ( str "Cannot find definition of constant "
-        ++ Id.print (Label.to_id (Constant.label (fst sp)))
+        ++ Id.print (Constant.label (fst sp))
         ++ str "." ) )
   | _ -> assert false
 
@@ -1222,7 +1222,7 @@ let termination_proof_header is_mes input_type ids args_id relation rec_arg_num
                    (onNLastHypsId (nargs + 1)
                       (tclMAP (fun id ->
                            tclTHEN (Generalize.generalize [mkVar id]) (clear [id]))))
-               ; observe_tac (fun _ _ -> str "fix") (fix hrec (nargs + 1))
+               ; observe_tac (fun _ _ -> str "fix") (FixTactics.fix hrec (nargs + 1))
                ; h_intros args_id
                ; Simple.intro wf_rec_arg
                ; observe_tac
@@ -1467,10 +1467,10 @@ let open_new_goal ~lemma build_proof sigma using_lemmas ref_ goal_name
   let lemma = Declare.Proof.start ~cinfo ~info sigma in
   let lemma =
     if Indfun_common.is_strict_tcc () then
-      fst @@ Declare.Proof.by tclIDTAC lemma
+      fst @@ Declare.Proof.by (Global.env ()) tclIDTAC lemma
     else
       fst
-      @@ Declare.Proof.by
+      @@ Declare.Proof.by (Global.env ())
            (tclTHEN decompose_and_tac
               (tclORELSE
                  (tclFIRST
@@ -1502,12 +1502,12 @@ let com_terminate interactive_proof tcc_lemma_name tcc_lemma_ref is_mes
     let lemma = Declare.Proof.start ~cinfo ~info ctx in
     let lemma =
       fst
-      @@ Declare.Proof.by
+      @@ Declare.Proof.by (Global.env ())
            (observe_tac (fun _ _ -> str "starting_tac") tac_start)
            lemma
     in
     fst
-    @@ Declare.Proof.by
+    @@ Declare.Proof.by (Global.env ())
          (observe_tac
             (fun _ _ -> str "whole_start")
             (whole_start tac_end nb_args is_mes fonctional_ref input_type
@@ -1573,7 +1573,7 @@ let com_eqn uctx nb_arg eq_name functional_ref f_ref terminate_ref
   let lemma = Declare.Proof.start ~cinfo evd ~info in
   let lemma =
     fst
-    @@ Declare.Proof.by
+    @@ Declare.Proof.by (Global.env ())
          (start_equation f_ref terminate_ref (fun x ->
               prove_eq
                 (fun _ -> Proofview.tclUNIT ())
@@ -1705,7 +1705,7 @@ let recursive_definition ~interactive_proof ~is_mes function_name rec_impls
   let tcc_lemma_constr = ref Undefined in
   (* let _ = Pp.msgnl (fun _ _ -> str "relation := " ++ Printer.pr_lconstr_env env_with_pre_rec_args relation) in *)
   let hook {Declare.Hook.S.uctx; dref; _ } =
-    assert (match dref with GlobRef.ConstRef cst -> Id.equal (Label.to_id (Constant.label cst)) term_id | _ -> assert false);
+    assert (match dref with GlobRef.ConstRef cst -> Id.equal (Constant.label cst) term_id | _ -> assert false);
     let f_ref =
       declare_f function_name Decls.(IsProof Lemma) arg_ctx dref
     in

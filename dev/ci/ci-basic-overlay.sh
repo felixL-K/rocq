@@ -441,7 +441,7 @@ project atbr "https://github.com/coq-community/atbr" "master"
 # perennial
 ########################################################################
 project perennial "https://github.com/mit-pdos/perennial" "coq/tested"
-# Contact @upamanyus, @RalfJung, @tchajed on github
+# Contact @upamanyus, @tchajed on github
 # PRs to fix Perennial failures should be submitted against the Perennial
 # `master` branch. `coq/tested` is automatically updated every night to the
 # `master` branch if CI on `master` is green. This is to avoid breaking Coq CI
@@ -472,9 +472,9 @@ project deriving "https://github.com/arthuraa/deriving" "master"
 # Contact @arthuraa on github
 
 ########################################################################
-# VsCoq
+# VsRocq
 ########################################################################
-project vscoq "https://github.com/coq-community/vscoq" "main"
+project vsrocq "https://github.com/rocq-prover/vsrocq" "main"
 # Contact @rtetley, @gares on github
 
 ########################################################################
@@ -550,4 +550,4 @@ project autosubst_ocaml "https://github.com/uds-psl/autosubst-ocaml" "master"
 # Trakt
 ########################################################################
 project trakt "https://github.com/ecranceMERCE/trakt" "coq-master"
-# Contact @ckeller, @louiseddp on github
+# Contact @ckeller on github

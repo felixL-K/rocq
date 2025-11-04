@@ -49,23 +49,27 @@ show the available targets. See [`build-system.dune.md`](build-system.dune.md)
 to learn more about them.
 
 ```
-$ git clone https://github.com/coq/coq.git
+$ git clone https://github.com/rocq-prover/rocq.git
 $ cd coq
 $ make
     # to get an idea of the available targets
 $ make check
    # build all OCaml files as fast as possible
-$ dune exec -- dev/shim/coqc-prelude test.v
-    # update coqc and the prelude and compile file test.v
 $ make world
     # build coq and the complete stdlib and setup it for use under _build/install/default
     # In particular, you may run, e.g., coq_makefile from _build/install/default
     # to build some test project
+$ dune exec -- rocq test.v
+    # compile file test.v
+    # The "rocq" shim will be updated if needed,
+    # but not the worker binary and not the corelib .vo files
 ```
 
-When running the commands above, you may set `DUNEOPT=--display=short`
-for a more verbose build (not required if you have already set the
-default verbosity globally as described in the previous section).
+When running the `make` targets above, you may set
+`DUNEOPT=--display=short` for a more verbose build
+(and use eg `dune exec --display=short -- rocq test.v` when calling dune directly)
+(not required if you have already set the default verbosity globally
+as described in the previous section).
 
 To learn how to run the test suite, you can read
 [`test-suite/README.md`](../../test-suite/README.md).
@@ -82,7 +86,7 @@ To learn how to run the test suite, you can read
 ## Development environment + tooling
 
 - [`Merlin`](https://github.com/ocaml/merlin) for autocomplete.
-- [Wiki pages on tooling containing `emacs`, `vim`, and `git` information](https://github.com/coq/coq/wiki/DevelSetup)
+- [Wiki pages on tooling containing `emacs`, `vim`, and `git` information](https://github.com/rocq-prover/rocq/wiki/DevelSetup)
 - [`ocamlformat`](https://github.com/ocaml-ppx/ocamlformat) provides
   support for automatic formatting of OCaml code. To use it please run
   `dune build @fmt`, see `ocamlformat`'s documentation for more help.

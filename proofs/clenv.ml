@@ -488,7 +488,7 @@ let clenv_pose_metas_as_evars ~metas env sigma dep_mvs =
       else
         let src = Meta.evar_source_of_meta mv metas in
         let src = adjust_meta_source ~metas sigma mv src in
-        let typeclass_candidate = Typeclasses.is_maybe_class_type sigma ty in
+        let typeclass_candidate = Typeclasses.is_maybe_class_type env sigma ty in
         let (sigma, evar) = new_evar ~typeclass_candidate env sigma ~src ty in
         let sigma, metas = clenv_assign ~metas env sigma mv evar in
         fold metas sigma mvs in
@@ -951,7 +951,7 @@ let build_case_analysis env sigma (ind, u) params pred indices indarg dep knd =
           if dep then Context.Rel.instance mkRel 0 deparsign
           else Context.Rel.instance mkRel 1 (List.tl deparsign)) in
     let iv =
-      if Typeops.should_invert_case env (ERelevance.kind sigma relevance) ci
+      if Inductiveops.Internal.should_invert_case env sigma (ERelevance.kind sigma relevance) ci
       then CaseInvert { indices = indices }
       else NoInvert
     in

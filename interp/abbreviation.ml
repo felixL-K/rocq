@@ -14,89 +14,105 @@ open Names
 open Libnames
 open Libobject
 open Lib
-open Notation_term
 open Notationextern
 
-(* Abbreviations. *)
+type abbreviation = {
+  abbrev_local : Libobject.locality;
+  abbrev_pattern : Notation_term.interpretation;
+  abbrev_onlyparsing : bool;
+  abbrev_user_warns : Globnames.extended_global_reference UserWarn.with_qf option;
+  abbrev_activated : bool; (* Not really necessary in practice *)
+  abbrev_src : Loc.t option;
+}
 
-type abbreviation =
-  { abbrev_pattern : interpretation;
-    abbrev_onlyparsing : bool;
-    abbrev_user_warns : Globnames.extended_global_reference UserWarn.with_qf option;
-    abbrev_activated : bool; (* Not really necessary in practice *)
-    abbrev_src : Loc.t option;
-  }
+type data = full_path * abbreviation
+
+let interp (_, a) = a.abbrev_pattern
+let full_path (fp, _) = fp
+let enabled (_, a) = a.abbrev_activated
+let only_parsing (_, a) = a.abbrev_onlyparsing
 
 let abbrev_table =
-  Summary.ref (KNmap.empty : (full_path * abbreviation) KNmap.t)
-    ~name:"ABBREVIATIONS"
+  Summary.ref (KerName.Map.empty : data KerName.Map.t) ~name:"ABBREVIATIONS"
 
-let add_abbreviation kn sp abbrev =
-  abbrev_table := KNmap.add kn (sp,abbrev) !abbrev_table
+let add kn fpa =
+  abbrev_table := KerName.Map.add kn fpa !abbrev_table
 
-let toggle_abbreviation ~on ~use kn =
-  let sp, data = KNmap.find kn !abbrev_table in
-  if data.abbrev_activated != on then
-    begin
-      abbrev_table := KNmap.add kn (sp, {data with abbrev_activated = on}) !abbrev_table;
-      match use with
-      | OnlyPrinting -> ()
-      | OnlyParsing | ParsingAndPrinting ->
-         if on then
-           begin
-             Nametab.push_abbreviation ?user_warns:data.abbrev_user_warns (Nametab.Until 1) sp kn;
-             Nametab.push_abbreviation (Nametab.Exactly 1) sp kn
-           end
-         else
-           Nametab.remove_abbreviation sp kn
-    end
+let fold f acc =
+  KerName.Map.fold f !abbrev_table acc
 
-let toggle_abbreviations ~on ~use filter =
-  KNmap.fold (fun kn (sp,abbrev) () ->
-      if abbrev.abbrev_activated != on && filter sp abbrev.abbrev_pattern then toggle_abbreviation ~on ~use kn)
-  !abbrev_table ()
+let find_opt k =
+  KerName.Map.find_opt k !abbrev_table
 
-let load_abbreviation i ((sp,kn),(_local,abbrev)) =
-  if Nametab.exists_cci sp then
-    user_err
-      (Id.print (basename sp) ++ str " already exists.");
-  add_abbreviation kn sp abbrev;
-  Nametab.push_abbreviation ?user_warns:abbrev.abbrev_user_warns (Nametab.Until i) sp kn;
-  abbrev.abbrev_src |> Option.iter (fun loc -> Nametab.set_cci_src_loc (Abbrev kn) loc)
+let toggle_aux ~on ~use k (sp, data) =
+  if data.abbrev_activated != on then begin
+    abbrev_table := KerName.Map.add k (sp, {data with abbrev_activated = on}) !abbrev_table;
+    match use with
+    | OnlyPrinting -> ()
+    | (OnlyParsing | ParsingAndPrinting) when on ->
+        Nametab.push_abbreviation ?user_warns:data.abbrev_user_warns (Nametab.Until 1) sp k;
+        Nametab.push_abbreviation (Nametab.Exactly 1) sp k
+    | OnlyParsing | ParsingAndPrinting ->
+        Nametab.remove_abbreviation sp k
+  end
+
+let toggle ~on ~use k =
+  toggle_aux ~on ~use k (KerName.Map.find k !abbrev_table)
+
+let toggle_if ~on ~use filter =
+  fold (fun k ((_, a) as abbr) _ ->
+    if a.abbrev_activated != on && filter k abbr then
+      toggle_aux ~on ~use k abbr
+  ) ()
 
 let is_alias_of_already_visible_name sp = function
-  | _,NRef (ref,None) ->
+  | _,Notation_term.NRef (ref,None) ->
       let (dir,id) = repr_qualid (Nametab.shortest_qualid_of_global Id.Set.empty ref) in
       DirPath.is_empty dir && Id.equal id (basename sp)
   | _ ->
       false
 
-let open_abbreviation i ((sp,kn),(_local,abbrev)) =
+let load_abbreviation i ((sp,kn),abbrev) =
+  if Nametab.exists_cci sp then
+    user_err
+      (Id.print (basename sp) ++ str " already exists.");
+  add kn (sp, abbrev);
+  Nametab.push_abbreviation ?user_warns:abbrev.abbrev_user_warns (Nametab.Until i) sp kn;
+  abbrev.abbrev_src |> Option.iter (fun loc -> Nametab.set_cci_src_loc (Abbrev kn) loc);
+  let pat = abbrev.abbrev_pattern in
+  let () = if not abbrev.abbrev_onlyparsing &&
+              abbrev.abbrev_local <> Export &&
+              not (Int.equal i 1 && is_alias_of_already_visible_name sp pat) then
+      Notationextern.declare_uninterpretation (Global.env ()) (AbbrevRule kn) pat
+  in
+  ()
+
+let open_abbreviation i ((sp,kn),abbrev) =
   let pat = abbrev.abbrev_pattern in
   if not (Int.equal i 1 && is_alias_of_already_visible_name sp pat) then begin
     Nametab.push_abbreviation (Nametab.Exactly i) sp kn;
-    if not abbrev.abbrev_onlyparsing then
-      (* Redeclare it to be used as (short) name in case an other (distfix)
-         notation was declared in between *)
-      Notationextern.declare_uninterpretation (AbbrevRule kn) pat
+    if not abbrev.abbrev_onlyparsing &&
+       Int.equal i 1 &&
+       abbrev.abbrev_local <> SuperGlobal then
+      Notationextern.declare_uninterpretation (Global.env ()) (AbbrevRule kn) pat
   end
 
-let import_abbreviation i sp kn =
-  let _,abbrev = KNmap.get kn !abbrev_table in
-  open_abbreviation i ((sp,kn),(false,abbrev))
+let import i sp kn =
+  let _,abbrev = KerName.Map.get kn !abbrev_table in
+  open_abbreviation i ((sp,kn),abbrev)
 
 let cache_abbreviation d =
   load_abbreviation 1 d;
   open_abbreviation 1 d
 
-let subst_abbreviation (subst,(local,abbrev)) =
+let subst_abbreviation (subst,abbrev) =
   let abbrev_pattern = Notation_ops.subst_interpretation subst abbrev.abbrev_pattern in
-  (local, { abbrev with abbrev_pattern })
+  { abbrev with abbrev_pattern }
 
-let classify_abbreviation (local,_) =
-  if local then Dispose else Substitute
+let classify_abbreviation abbrev =
+  if abbrev.abbrev_local = Local then Dispose else Substitute
 
-let inAbbreviation : Id.t -> (bool * abbreviation) -> obj =
+let inAbbreviation : Id.t -> abbreviation -> obj =
   declare_named_object {(default_object "ABBREVIATION") with
     cache_function = cache_abbreviation;
     load_function = load_abbreviation;
@@ -104,23 +120,19 @@ let inAbbreviation : Id.t -> (bool * abbreviation) -> obj =
     subst_function = subst_abbreviation;
     classify_function = classify_abbreviation }
 
-let declare_abbreviation ~local user_warns id ~onlyparsing pat =
-  let abbrev =
-    { abbrev_pattern = pat;
-      abbrev_onlyparsing = onlyparsing;
-      abbrev_user_warns = user_warns;
-      abbrev_activated = true;
-      abbrev_src = Loc.get_current_command_loc();
+let declare ~local user_warns id ~onlyparsing pat =
+  let abbrev = {
+    abbrev_local = local;
+    abbrev_pattern = pat;
+    abbrev_onlyparsing = onlyparsing;
+    abbrev_user_warns = user_warns;
+    abbrev_activated = true;
+    abbrev_src = Loc.get_current_command_loc();
     }
   in
-  add_leaf (inAbbreviation id (local,abbrev))
+  add_leaf (inAbbreviation id abbrev)
 
 (* Remark: do not check for activation (if not activated, it is already not supposed to be located) *)
-let search_abbreviation kn =
-  let _,abbrev = KNmap.find kn !abbrev_table in
+let find_interp kn =
+  let _,abbrev = KerName.Map.find kn !abbrev_table in
   abbrev.abbrev_pattern
-
-let search_filtered_abbreviation filter kn =
-  let _,abbrev = KNmap.find kn !abbrev_table in
-  let res = filter abbrev.abbrev_pattern in
-  res

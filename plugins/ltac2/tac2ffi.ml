@@ -59,6 +59,8 @@ let val_ind_data : (Names.Ind.t * Declarations.mutual_inductive_body) Val.tag = 
 let val_transparent_state : TransparentState.t Val.tag = Val.create "transparent_state"
 let val_pretype_flags = Val.create "pretype_flags"
 let val_expected_type = Val.create "expected_type"
+let val_reduction = Val.create "reduction"
+let val_rewstrategy = Val.create "rewstrategy"
 
 let extract_val (type a) (type b) (tag : a Val.tag) (tag' : b Val.tag) (v : b) : a =
 match Val.eq tag tag' with
@@ -237,12 +239,32 @@ let of_sort ev = of_ext val_sort ev
 let to_sort ev = to_ext val_sort ev
 let sort = repr_ext val_sort
 
-let internal_err =
-  let open Names in
-  let rocq_prefix =
-    MPfile (DirPath.make (List.map Id.of_string ["Init"; "Ltac2"]))
-  in
-  KerName.make rocq_prefix (Label.of_id (Id.of_string "Internal"))
+let of_reduction ev = of_ext val_reduction ev
+let to_reduction ev = to_ext val_reduction ev
+let reduction = repr_ext val_reduction
+
+let of_rewstrategy ev = of_ext val_rewstrategy ev
+let to_rewstrategy ev = to_ext val_rewstrategy ev
+let rewstrategy = repr_ext val_rewstrategy
+
+let rocq_core n = Names.(KerName.make Tac2env.rocq_prefix (Id.of_string_soft n))
+
+let internal_err = rocq_core "Internal"
+
+let err_notfocussed =
+  LtacError (rocq_core "Not_focussed", [||])
+
+let err_outofbounds =
+  LtacError (rocq_core "Out_of_bounds", [||])
+
+let err_notfound =
+  LtacError (rocq_core "Not_found", [||])
+
+let err_matchfailure =
+  LtacError (rocq_core "Match_failure", [||])
+
+let err_division_by_zero =
+  LtacError (rocq_core "Division_by_zero", [||])
 
 let of_exninfo = of_ext val_exninfo
 let to_exninfo = to_ext val_exninfo

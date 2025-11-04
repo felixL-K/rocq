@@ -130,7 +130,7 @@ let proof p =
     | [_] -> []
     | a::l -> f a :: (map_minus_one f l)
   in
-  let map (FocusElt (_, _, c)) = Proofview.focus_context c in
+  let map (FocusElt (_, _, c)) = Proofview.focus_context sigma c in
   let stack = map_minus_one map p.focus_stack in
   (goals,stack,sigma)
 
@@ -377,7 +377,7 @@ let data { proofview; focus_stack; entry; name; poly } =
     | [_] -> []
     | a::l -> f a :: (map_minus_one f l)
   in
-  let map (FocusElt (_, _, c)) = Proofview.focus_context c in
+  let map (FocusElt (_, _, c)) = Proofview.focus_context sigma c in
   let stack = map_minus_one map focus_stack in
   { sigma; goals; entry; stack; name; poly }
 
@@ -425,18 +425,7 @@ let solve_constraints =
   Proofview.tclOR Refine.solve_constraints
     (fun (e,info) -> Proofview.tclZERO ~info (FailedConstraints e))
 
-let register_side_effects eff =
-  let open Names in
-  let cst = Safe_typing.constants_of_private eff.Evd.seff_private in
-  let iter kn =
-    let gr = GlobRef.ConstRef kn in
-    let id = Label.to_id (Constant.label kn) in
-    let sp = Lib.make_path id in
-    Nametab.push (Nametab.Until 1) sp gr
-  in
-  List.iter iter cst
-
-let solve ?with_end_tac gi info_lvl tac pr =
+let solve ?with_end_tac env gi info_lvl tac pr =
     let tac = match with_end_tac with
       | None -> tac
       | Some etac -> Proofview.tclTHEN tac etac in
@@ -454,18 +443,15 @@ let solve ?with_end_tac gi info_lvl tac pr =
         Proofview.tclTHEN tac solve_constraints
       else tac
     in
-    let env = Global.env () in
     let env = Environ.update_typing_flags ?typing_flags:pr.typing_flags env in
-    let (p,(_env,status,info),()) = run_tactic env tac pr in
-    let () = register_side_effects (Evd.eval_side_effects (Proofview.return p.proofview)) in
-    let env = Global.env () in
-    let sigma = Evd.from_env env in
+    let (p, (env, status, info), ()) = run_tactic env tac pr in
+    let sigma = (data p).sigma in
     let () =
       match info_lvl with
       | None -> ()
       | Some i -> Feedback.msg_info (Pp.hov 0 (Proofview.Trace.pr_info env sigma ~lvl:i info))
     in
-    (p,status)
+    (p, status)
 
 (**********************************************************************)
 (* Shortcut to build a term using tactics *)
@@ -511,7 +497,7 @@ let refine_by_tactic ~name ~poly env sigma ty tac =
      other goals that were already present during its invocation, so that
      those goals rely on effects that are not present anymore. Hopefully,
      this hack will work in most cases. *)
-  let neff = neff.Evd.seff_private in
+  let neff = Evd.seff_private neff in
   let (ans, _) = Safe_typing.inline_private_constants env ((ans, Univ.ContextSet.empty), neff) in
   EConstr.of_constr ans, sigma
 

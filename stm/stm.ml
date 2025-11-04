@@ -402,7 +402,7 @@ end = struct (* {{{ *)
 
        In case you are hitting the race enable stm_debug.
     *)
-    if !stm_debug then Flags.in_synterp_phase := false;
+    Flags.in_synterp_phase := Some false;
 
     let fname =
       "stm_" ^ Str.global_replace (Str.regexp " ") "_" (Spawned.process_id ()) in
@@ -1934,9 +1934,12 @@ let known_state ~doc ?(redefine_qed=false) ~cache id =
            match (VCS.get_info base_state).state with
            | FullState { Vernacstate.interp = { lemmas } } ->
                Option.iter PG_compat.unfreeze lemmas;
-               PG_compat.with_current_proof (fun _ p ->
-                 feedback ~id:id Feedback.AddedAxiom;
-                 fst (Proof.solve Goal_select.SelectAll None tac p), ());
+               PG_compat.with_current_proof (fun p ->
+                 let () = feedback ~id:id Feedback.AddedAxiom in
+                 let (pf, _) = Proof.solve (Global.env ()) Goal_select.SelectAll None tac p in
+                 (* XXX is it really necessary to register the effects here? *)
+                 let pf = Declare.Internal.register_side_effects pf in
+                 pf, ());
                (* STATE SPEC:
                 * - start: Modifies the input state adding a proof.
                 * - end  : maybe after recovery command.

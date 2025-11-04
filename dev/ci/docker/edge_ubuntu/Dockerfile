@@ -22,6 +22,8 @@ RUN apt-get update -qq && apt-get install --no-install-recommends -y -qq \
         python3-pip python3-setuptools python3-pexpect python3-bs4 fonts-freefont-otf \
         # pipeline-stats
         python3-gitlab python3-tabulate \
+        # Dependency of stdlib-doc
+        graphviz \
         # Dependencies of source-doc and coq-makefile
         texlive-latex-extra texlive-science tipa \
         # Dependencies of HB (test suite)
@@ -54,15 +56,17 @@ ENV COMPILER="4.14.2" \
     BASE_OPAM="zarith.1.13 ounit2.2.2.6 camlzip.1.13" \
     CI_OPAM="ocamlgraph.2.0.0 cppo.1.6.9" \
     BASE_OPAM_EDGE="dune.3.14.0 dune-build-info.3.14.0 dune-release.2.0.0 ocamlfind.1.9.6 odoc.2.3.1" \
-    CI_OPAM_EDGE="elpi.2.0.7 ppx_import.1.10.0 cmdliner.1.1.1 sexplib.v0.15.1 ppx_sexp_conv.v0.15.1 ppx_hash.v0.15.0 ppx_compare.v0.15.0 ppx_deriving_yojson.3.7.0 yojson.2.1.0 uri.4.2.0 ppx_yojson_conv.v0.15.1 ppx_inline_test.v0.15.1 ppx_assert.v0.15.0 ppx_optcomp.v0.15.0 lsp.1.16.2 sel.0.6.0" \
+    CI_OPAM_EDGE="elpi.3.0.1 ppx_import.1.10.0 cmdliner.1.1.1 sexplib.v0.15.1 ppx_sexp_conv.v0.15.1 ppx_hash.v0.15.0 ppx_compare.v0.15.0 ppx_deriving_yojson.3.7.0 yojson.2.1.0 uri.4.2.0 ppx_yojson_conv.v0.15.1 ppx_inline_test.v0.15.1 ppx_assert.v0.15.0 ppx_optcomp.v0.15.0 lsp.1.16.2 sel.0.6.0" \
     COQIDE_OPAM_EDGE="lablgtk3-sourceview3.3.1.3"
 
 # EDGE+flambda switch, we install CI_OPAM as to be able to use
 # `ci-template-flambda` with everything.
-RUN opam init -a --disable-sandboxing --bare && eval $(opam env) && opam update && \
+RUN opam init -a --disable-sandboxing --bare && eval $(opam env) && \
     opam switch create "${COMPILER}+flambda" \
       --repositories default,ocaml-beta=git+https://github.com/ocaml/ocaml-beta-repository.git,coq-core-dev=https://coq.inria.fr/opam/core-dev \
       --packages="ocaml-variants.${COMPILER}+options,ocaml-option-flambda" && eval $(opam env) && \
+    opam repo add archive git+https://github.com/ocaml/opam-repository-archive && \
+    opam update && \
     opam install $BASE_OPAM $BASE_OPAM_EDGE $COQIDE_OPAM_EDGE $CI_OPAM $CI_OPAM_EDGE && \
     opam clean -a -c
 

@@ -155,8 +155,8 @@ Tactics
      If present, rewrite all occurrences whose side conditions are solved.
 
      .. todo: This may not always work as described, see #4976 #7672 and
-        https://github.com/coq/coq/issues/1933#issuecomment-337497938 as
-        mentioned here: https://github.com/coq/coq/pull/13343#discussion_r527801604
+        https://github.com/rocq-prover/rocq/issues/1933#issuecomment-337497938 as
+        mentioned here: https://github.com/rocq-prover/rocq/pull/13343#discussion_r527801604
 
    :n:`with {+ @ident }`
      Specifies the rewriting rule bases to use.
@@ -214,6 +214,7 @@ the optional tactic of the ``Hint Rewrite`` command.
 
    .. rocqtop:: in
 
+      Create Rewrite HintDb base0.
       Global Hint Rewrite Ack0 Ack1 Ack2 : base0.
 
    .. rocqtop:: all
@@ -244,6 +245,7 @@ the optional tactic of the ``Hint Rewrite`` command.
 
    .. rocqtop:: in extra-stdlib
 
+      Create Rewrite HintDb base1.
       Global Hint Rewrite g0 g1 g2 using lia : base1.
 
    .. rocqtop:: in extra-stdlib
@@ -308,10 +310,12 @@ pattern or when the hint has no pattern.
 Creating hint databases
 ```````````````````````
 
-Hint databases can be created with the :cmd:`Create HintDb` command or implicitly
-by adding a hint to an unknown database.  We recommend you always use :cmd:`Create HintDb`
-and then imediately use :cmd:`Hint Constants` and :cmd:`Hint Variables` to make
-those settings explicit.
+Hint databases can be created with the :cmd:`Create HintDb` command.
+After a call to :cmd:`Create HintDb`, we recommend to immediately use
+:cmd:`Hint Constants` and :cmd:`Hint Variables` to make those settings explicit.
+
+Alternatively, adding a hint to an unknown database creates the latter
+implicitly, but this behavior is deprecated as of Rocq 9.2.
 
 Note that the default transparency
 settings differ between these two methods of creation.  Databases created with
@@ -338,6 +342,10 @@ and `Constants`, while implicitly created databases have the `Opaque` setting.
       `Create HintDb` will not change whether a pre-existing database
       is discriminated.
 
+.. cmd:: Create Rewrite HintDb @ident
+
+   Like above, but creates a database for :cmd:`Hint Rewrite` declarations
+   instead.
 
 Hint databases defined in the Rocq standard library
 ```````````````````````````````````````````````````
@@ -411,13 +419,19 @@ Creating Hints
    + :attr:`export` hints are visible from other modules when they :cmd:`Import` the current
      module, but not when they only :cmd:`Require` it.
 
-   + :attr:`global` hints are visible from other modules when they :cmd:`Import` or
-     :cmd:`Require` the current module.
+   + :attr:`global` hints are visible from other modules when they
+     :cmd:`Require` the current module (submodules of the current module
+     are considered :cmd:`Require`\d after their :cmd:`End`).
 
    .. versionchanged:: 8.18
 
       The default value for hint locality outside sections is
       now :attr:`export`. It used to be :attr:`global`.
+
+   .. deprecated:: 9.2
+
+      Implicitly creating a unknown database is now deprecated and will become
+      an error.
 
    The `Hint` commands are:
 
@@ -551,10 +565,11 @@ Creating Hints
          .. rocqtop:: reset all
 
             Require Import ListDef.
+            Create HintDb eqdec.
             Hint Extern 5 ({?X1 = ?X2} + {?X1 <> ?X2}) =>
               generalize  X1, X2; decide equality : eqdec.
             Goal forall a b:list (nat * nat), {a = b} + {a <> b}.
-            info_auto.
+            info_auto with eqdec.
 
    .. cmd:: Hint Cut [ @hints_regexp ] {? : {+ @ident } }
 
@@ -649,6 +664,7 @@ Creating Hints
       .. rocqtop:: all reset
 
          Parameter plus : nat -> nat -> nat -> Prop.
+         Create HintDb plus.
          Hint Mode plus ! - - : plus.
          Hint Mode plus - ! - : plus.
 
@@ -727,31 +743,6 @@ Creating Hints
    (first to last).  The groups are shown ordered alphabetically on the last component of
    the symbol name.  Note that hints with the same cost are tried in
    reverse of the order they're defined in, i.e., last to first.
-
-Hint locality
-`````````````
-
-As explained at the beginning of :ref:`creating_hints`, hints outside sections have three
-possible localities: :attr:`local`, :attr:`export`, and :attr:`global`,
-with :attr:`export` now being the default. The default used to
-be :attr:`global`, so old code bases may still use it. The following
-option may be useful to help transition hints from the :attr:`global`
-to the :attr:`export` locality, as it can provide an over-approximation
-of where these hints are used:
-
-.. opt:: Loose Hint Behavior {| "Lax" | "Warn" | "Strict" }
-
-   This :term:`option` accepts three values:
-
-   - "Lax": no scope errors or warnings are generated for hints. This is the default.
-
-   - "Warn": outputs a warning when a non-imported hint is used. Note that this
-     is an over-approximation, because a hint may be triggered by a run that
-     will eventually fail and backtrack, resulting in the hint not being
-     actually useful for the proof.
-
-   - "Strict": fails when a non-imported hint is used, with the same caveats
-     as "Warn".
 
 .. _tactics-implicit-automation:
 

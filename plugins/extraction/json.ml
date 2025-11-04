@@ -56,7 +56,7 @@ let preamble table mod_name comment used_modules usf =
     ("need_magic", json_bool (usf.magic));
     ("need_dummy", json_bool (usf.mldummy));
     ("used_modules", json_list
-      (List.map (fun mf -> json_str (file_of_modfile table mf)) used_modules))
+      (List.map (fun mf -> json_str (file_of_modfile (State.get_table table) mf)) (DirPath.Set.elements used_modules)))
   ]
 
 
@@ -215,10 +215,10 @@ and json_function table env t =
 
 let json_ind table ip pl cv = json_dict [
     ("what", json_str "decl:ind");
-    ("name", json_global table Type (GlobRef.IndRef ip));
+    ("name", json_global table Type ip.ip_typename_ref);
     ("argnames", json_list (List.map json_id pl));
     ("constructors", json_listarr (Array.mapi (fun idx c -> json_dict [
-        ("name", json_global table Cons (GlobRef.ConstructRef (ip, idx+1)));
+        ("name", json_global table Cons ip.ip_consnames_ref.(idx));
         ("argtypes", json_list (List.map (json_type table pl) c))
       ]) cv))
   ]
@@ -227,9 +227,9 @@ let json_ind table ip pl cv = json_dict [
 (*s Pretty-printing of a declaration. *)
 
 let pp_decl table = function
-  | Dind (kn, defs) -> prvecti_with_sep pr_comma
+  | Dind defs -> prvecti_with_sep pr_comma
     (fun i p -> if p.ip_logical then str ""
-     else json_ind table (kn, i) p.ip_vars p.ip_types) defs.ind_packets
+     else json_ind table p p.ip_vars p.ip_types) defs.ind_packets
   | Dtype (r, l, t) -> json_dict [
       ("what", json_str "decl:type");
       ("name", json_global table Type r);
@@ -243,14 +243,14 @@ let pp_decl table = function
           ("what", json_str "fixgroup:item");
           ("name", json_global table Term rv.(i));
           ("type", json_type table [] typs.(i));
-          ("value", json_function table (empty_env ()) defs.(i))
+          ("value", json_function table (empty_env table ()) defs.(i))
         ]) rv))
     ]
   | Dterm (r, a, t) -> json_dict [
       ("what", json_str "decl:term");
       ("name", json_global table Term r);
       ("type", json_type table [] t);
-      ("value", json_function table (empty_env ()) a)
+      ("value", json_function table (empty_env table ()) a)
     ]
 
 let rec pp_structure_elem table = function
@@ -267,23 +267,23 @@ and pp_module_expr table = function
       (* should be expansed in extract_env *)
 
 let pp_struct table mls =
-  let pp_sel (mp,sel) =
-    push_visible mp [];
+  let pp_sel (mp,sel) = State.with_visibility table mp [] begin fun table ->
     let p = prlist_with_sep pr_comma identity
       (List.concat (List.map (pp_structure_elem table) sel)) in
-    pop_visible (); p
-  in
+    p
+  end in
   str "," ++ fnl () ++
   str "  " ++ qs "declarations" ++ str ": [" ++ fnl () ++
   str "    " ++ hov 0 (prlist_with_sep pr_comma pp_sel mls) ++ fnl () ++
   str "  ]" ++ fnl () ++
   str "}" ++ fnl ()
 
+let file_naming state mp = file_of_modfile (State.get_table state) mp
 
 let json_descr = {
   keywords = Id.Set.empty;
   file_suffix = ".json";
-  file_naming = file_of_modfile;
+  file_naming = file_naming;
   preamble = preamble;
   pp_struct = pp_struct;
   sig_suffix = None;

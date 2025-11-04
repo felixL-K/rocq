@@ -16,7 +16,6 @@ open Pp
 open CErrors
 open Util
 open Names
-open Libnames
 open Nameops
 open Constr
 open EConstr
@@ -35,7 +34,7 @@ type dep_flag = bool
 
 (* Errors related to recursors building *)
 type recursion_scheme_error =
-  | NotAllowedCaseAnalysis of (*isrec:*) bool * Sorts.t * pinductive
+  | NotAllowedCaseAnalysis of Evd.evar_map * (*isrec:*) bool * Sorts.t * pinductive
   | NotMutualInScheme of inductive * inductive
   | NotAllowedDependentAnalysis of (*isrec:*) bool * inductive
 
@@ -155,7 +154,7 @@ let check_valid_elimination env sigma (ind, u as pind) ~dep s =
     let pind = on_snd EConstr.Unsafe.to_instance pind in
     raise
       (RecursionSchemeError
-         (env, NotAllowedCaseAnalysis (false, s, pind)))
+         (env, NotAllowedCaseAnalysis (sigma, false, s, pind)))
 
 let paramdecls_fresh_template sigma (mib,u) =
   match mib.mind_template with
@@ -204,8 +203,8 @@ let mis_make_case_com dep env sigma (ind, u as pind) (mib, mip) s =
     else
       let cs = lift_constructor (k+1) constrs.(k) in
       let t = build_branch_type !!env sigma dep (mkRel (k+1)) cs in
-      let namef = make_name env "f" relevance in
-      let decl = LocalAssum (namef, t) in
+      let branch_name = make_annot (Name cs.cs_name) relevance in
+      let decl = LocalAssum (branch_name, t) in
       get_branches (RelEnv.push_rel decl env) (k + 1) (decl :: accu)
   in
 
@@ -451,7 +450,7 @@ let mis_make_indrec env sigma ?(force_mutual=false) listdepkind mib u =
   in
   let nrec = List.length listdepkind in
   let depPvec =
-    Array.make mib.mind_ntypes (None : (bool * constr) option) in
+    Array.make (Declareops.mind_ntypes mib) (None : (bool * constr) option) in
   let _ =
     let rec
         assign k = function
@@ -590,9 +589,9 @@ let mis_make_indrec env sigma ?(force_mutual=false) listdepkind mib u =
                   true dep !!env !evdref (vargs,depPvec,i+j) indi cs recarg
               in
               let r_0 = Retyping.relevance_of_sort sfam in
-              let namef = make_name env "f" r_0 in
-                mkLambda (namef, p_0,
-                  (onerec (RelEnv.push_rel (LocalAssum (namef,p_0)) env)) (j+1))
+              let case_name = make_annot (Name cs.cs_name) r_0 in
+                mkLambda (case_name, p_0,
+                  (onerec (RelEnv.push_rel (LocalAssum (case_name,p_0)) env)) (j+1))
           in onerec env 0
       | [] ->
           makefix i listdepkind
@@ -682,7 +681,7 @@ let check_arities env sigma listdepkind =
         let u = EInstance.kind sigma u in
         raise
          (RecursionSchemeError
-          (env, NotAllowedCaseAnalysis (true, s,(mind,u))))
+          (env, NotAllowedCaseAnalysis (sigma, true, s,(mind,u))))
        else if Int.List.mem ni ln then raise
          (RecursionSchemeError (env, NotMutualInScheme (mind,mind)))
        else ni::ln)
@@ -724,45 +723,3 @@ let build_induction_scheme env sigma pind dep kind =
     raise (RecursionSchemeError (env, NotAllowedDependentAnalysis (true, fst pind)));
   let sigma, l = mis_make_indrec env sigma [(pind,mib,mip,dep,kind)] mib (snd pind) in
     sigma, List.hd l
-
-(*s Eliminations. *)
-
-let elimination_suffix =
-  let open UnivGen.QualityOrSet in
-  let open Sorts.Quality in
-  function
-  | Qual (QConstant QSProp) -> "_sind"
-  | Qual (QConstant QProp) -> "_ind"
-  | Qual (QConstant QType) | Qual (QVar _) -> "_rect"
-  | Set -> "_rec"
-
-let case_suffix = "_case"
-
-let make_elimination_ident id s = add_suffix id (elimination_suffix s)
-
-(* Look up function for the default elimination constant *)
-
-let lookup_eliminator env ind_sp s =
-  let kn,i = ind_sp in
-  let mpu = KerName.modpath @@ MutInd.user kn in
-  let mpc = KerName.modpath @@ MutInd.canonical kn in
-  let ind_id = (lookup_mind kn env).mind_packets.(i).mind_typename in
-  let id = add_suffix ind_id (elimination_suffix s) in
-  let l = Label.of_id id in
-  let knu = KerName.make mpu l in
-  let knc = KerName.make mpc l in
-  (* Try first to get an eliminator defined in the same section as the *)
-  (* inductive type *)
-  let cst = Constant.make knu knc in
-  if mem_constant cst env then GlobRef.ConstRef cst
-  else
-    (* Then try to get a user-defined eliminator in some other places *)
-    (* using short name (e.g. for "eq_rec") *)
-    try Nametab.locate (qualid_of_ident id)
-    with Not_found ->
-      user_err
-        (strbrk "Cannot find the elimination combinator " ++
-         Id.print id ++ strbrk ", the elimination of the inductive definition " ++
-         Nametab.pr_global_env Id.Set.empty (GlobRef.IndRef ind_sp) ++
-         strbrk " on sort " ++ UnivGen.QualityOrSet.pr Sorts.QVar.raw_pr s ++
-         strbrk " is probably not allowed.")

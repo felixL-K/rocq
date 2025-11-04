@@ -149,10 +149,13 @@ let dummy_module_name = "If you see this, it's a bug"
 
 module DirPath =
 struct
+  module Self = struct
   type t = Id.t list
 
   let compare = List.compare Id.compare
   let equal = List.equal Id.equal
+  end
+  include Self
 
   let rec hash accu = function
   | [] -> accu
@@ -181,7 +184,13 @@ struct
 
   let hcons = Hashcons.simple_hcons Hdir.generate Hdir.hcons ()
 
+  module Set = Set.Make(Self)
+  module Map = Map.Make(Self)
+
 end
+
+module DPset = DirPath.Set
+module DPmap = DirPath.Map
 
 (** {6 Unique names for bound modules } *)
 
@@ -245,20 +254,18 @@ struct
 
   let hcons = Hashcons.simple_hcons HashMBId.generate HashMBId.hcons ()
 
+  module Self = struct
+    type nonrec t = t
+    let compare = compare
+  end
+
+  module Set = Set.Make(Self)
+  module Map = CMap.Make(Self)
+
 end
 
-module MBImap = CMap.Make(MBId)
-module MBIset = Set.Make(MBId)
-
-(** {6 Names of structure elements } *)
-
-module Label =
-struct
-  include Id
-  let make = Id.of_string
-  let of_id id = id
-  let to_id id = id
-end
+module MBImap = MBId.Map
+module MBIset = MBId.Set
 
 (** {6 The module part of the kernel name } *)
 
@@ -267,7 +274,7 @@ module ModPath = struct
   type t =
     | MPfile of DirPath.t
     | MPbound of MBId.t
-    | MPdot of t * Label.t
+    | MPdot of t * Id.t
 
   type module_path = t
 
@@ -279,14 +286,14 @@ module ModPath = struct
   let rec to_string = function
     | MPfile sl -> DirPath.to_string sl
     | MPbound uid -> MBId.to_string uid
-    | MPdot (mp,l) -> to_string mp ^ "." ^ Label.to_string l
+    | MPdot (mp,l) -> to_string mp ^ "." ^ Id.to_string l
 
   let print mp = str (to_string mp)
 
   let rec debug_to_string = function
     | MPfile sl -> DirPath.to_string sl
     | MPbound uid -> MBId.debug_to_string uid
-    | MPdot (mp,l) -> debug_to_string mp ^ "." ^ Label.to_string l
+    | MPdot (mp,l) -> debug_to_string mp ^ "." ^ Id.to_string l
 
   (** we compare labels first if both are MPdots *)
   let rec compare mp1 mp2 =
@@ -322,7 +329,7 @@ module ModPath = struct
   | MPfile dp -> combinesmall 1 (DirPath.hash dp)
   | MPbound id -> combinesmall 2 (MBId.hash id)
   | MPdot (mp, lbl) ->
-    combinesmall 3 (combine (hash mp) (Label.hash lbl))
+    combinesmall 3 (combine (hash mp) (Id.hash lbl))
 
   let dummy = MPfile DirPath.dummy
 
@@ -358,13 +365,18 @@ module ModPath = struct
 
   let hcons = Hashcons.simple_hcons HashMP.generate HashMP.hcons ()
 
+  module Self = struct
+    type nonrec t = t
+    let compare = compare
+  end
+
+  module Set = Set.Make(Self)
+  module Map = CMap.Make(Self)
+
 end
 
-module DPset = Set.Make(DirPath)
-module DPmap = Map.Make(DirPath)
-
-module MPset = Set.Make(ModPath)
-module MPmap = CMap.Make(ModPath)
+module MPset = ModPath.Set
+module MPmap = ModPath.Map
 
 (** {6 Kernel names } *)
 
@@ -372,7 +384,7 @@ module KerName = struct
 
   type t = {
     modpath : ModPath.t;
-    knlabel : Label.t;
+    knlabel : Id.t;
     refhash : int;
     (** Lazily computed hash. If unset, it is set to negative values. *)
   }
@@ -381,7 +393,7 @@ module KerName = struct
 
   let make modpath knlabel =
     let open Hashset.Combine in
-    let refhash = combine (ModPath.hash modpath) (Label.hash knlabel) in
+    let refhash = combine (ModPath.hash modpath) (Id.hash knlabel) in
     (* Truncate for backwards compatibility w.r.t. ordering *)
     let refhash = refhash land 0x3FFFFFFF in
     { modpath; knlabel; refhash; }
@@ -392,7 +404,7 @@ module KerName = struct
   let label kn = kn.knlabel
 
   let to_string_gen mp_to_string kn =
-    mp_to_string kn.modpath ^ "." ^ Label.to_string kn.knlabel
+    mp_to_string kn.modpath ^ "." ^ Id.to_string kn.knlabel
 
   let to_string kn = to_string_gen ModPath.to_string kn
 
@@ -415,7 +427,7 @@ module KerName = struct
     let h2 = kn2.refhash in
     if 0 <= h1 && 0 <= h2 && not (Int.equal h1 h2) then false
     else
-      Label.equal kn1.knlabel kn2.knlabel &&
+      Id.equal kn1.knlabel kn2.knlabel &&
       ModPath.equal kn1.modpath kn2.modpath
 
   let hash kn = kn.refhash
@@ -434,11 +446,22 @@ module KerName = struct
   module HashKN = Hashcons.Make(Self_Hashcons)
 
   let hcons = Hashcons.simple_hcons HashKN.generate HashKN.hcons ()
+
+  module Self = struct
+    type nonrec t = t
+    let compare = compare
+    let hash = hash
+  end
+
+  module Map = HMap.Make(Self)
+  module Set = Map.Set
+  module Pred = Predicate.Make(Self)
+
 end
 
-module KNmap = HMap.Make(KerName)
-module KNpred = Predicate.Make(KerName)
-module KNset = KNmap.Set
+module KNmap = KerName.Map
+module KNpred = KerName.Pred
+module KNset = KerName.Set
 
 (** {6 Kernel pairs } *)
 
@@ -455,7 +478,6 @@ sig
   type t
   module CanOrd : EqType with type t = t
   module UserOrd : EqType with type t = t
-  module SyntacticOrd : EqType with type t = t
   val canonize : t -> t
 end
 
@@ -541,23 +563,6 @@ module KerPair = struct
     let compare x y = KerName.compare (canonical x) (canonical y)
     let equal x y = x == y || KerName.equal (canonical x) (canonical y)
     let hash x = KerName.hash (canonical x)
-  end
-
-  module SyntacticOrd = struct
-    type t = kernel_pair
-    let compare x y = match x, y with
-      | Same knx, Same kny -> KerName.compare knx kny
-      | Dual (knux,kncx), Dual (knuy,kncy) ->
-        let c = KerName.compare knux knuy in
-        if not (Int.equal c 0) then c
-        else KerName.compare kncx kncy
-      | Same _, _ -> -1
-      | Dual _, _ -> 1
-    let equal x y = x == y || compare x y = 0
-    let hash = function
-      | Same kn -> KerName.hash kn
-      | Dual (knu, knc) ->
-        Hashset.Combine.combine (KerName.hash knu) (KerName.hash knc)
   end
 
   (** Default (logical) comparison and hash is on the canonical part *)
@@ -649,20 +654,6 @@ struct
       Hashset.Combine.combine (MutInd.UserOrd.hash m) (Int.hash i)
   end
 
-  module SyntacticOrd =
-  struct
-    type nonrec t = t
-    let equal (m1, i1) (m2, i2) =
-      Int.equal i1 i2 && MutInd.SyntacticOrd.equal m1 m2
-
-    let compare (m1, i1) (m2, i2) =
-      let c = Int.compare i1 i2 in
-      if Int.equal c 0 then MutInd.SyntacticOrd.compare m1 m2 else c
-
-    let hash (m, i) =
-      Hashset.Combine.combine (MutInd.SyntacticOrd.hash m) (Int.hash i)
-  end
-
   let canonize ((mind, i) as ind) =
     let mind' = MutInd.canonize mind in
     if mind' == mind then ind else (mind', i)
@@ -699,18 +690,6 @@ struct
       if Int.equal c 0 then Ind.UserOrd.compare ind1 ind2 else c
     let hash (ind, i) =
       Hashset.Combine.combine (Ind.UserOrd.hash ind) (Int.hash i)
-  end
-
-  module SyntacticOrd =
-  struct
-    type nonrec t = t
-    let equal (ind1, j1) (ind2, j2) =
-      Int.equal j1 j2 && Ind.SyntacticOrd.equal ind1 ind2
-    let compare (ind1, j1) (ind2, j2) =
-      let c = Int.compare j1 j2 in
-      if Int.equal c 0 then Ind.SyntacticOrd.compare ind1 ind2 else c
-    let hash (ind, i) =
-      Hashset.Combine.combine (Ind.SyntacticOrd.hash ind) (Int.hash i)
   end
 
   let canonize ((ind, i) as cstr) =
@@ -792,9 +771,6 @@ let hash_table_key f ik =
   | VarKey id -> combinesmall 2 (Id.hash id)
   | RelKey i -> combinesmall 3 (Int.hash i)
 
-let eq_mind_chk = MutInd.UserOrd.equal
-let eq_ind_chk (kn1,i1) (kn2,i2) = Int.equal i1 i2 && eq_mind_chk kn1 kn2
-
 (*******************************************************************)
 (** Compatibility layers *)
 
@@ -805,7 +781,7 @@ let eq_constant_key = Constant.UserOrd.equal
 type module_path = ModPath.t =
   | MPfile of DirPath.t
   | MPbound of MBId.t
-  | MPdot of module_path * Label.t
+  | MPdot of module_path * Id.t
 
 (** Compatibility layer for [Constant] *)
 
@@ -847,21 +823,8 @@ struct
         let c = Int.compare a.proj_npars b.proj_npars in
         if c <> 0 then c
         else
-          Label.compare (Constant.label a.proj_name) (Constant.label b.proj_name)
+          Id.compare (Constant.label a.proj_name) (Constant.label b.proj_name)
 
-    module SyntacticOrd = struct
-      type nonrec t = t
-
-      let compare a b =
-        let c = Ind.SyntacticOrd.compare a.proj_ind b.proj_ind in
-        if c <> 0 then c
-        else compare_gen a b
-
-      let equal a b = compare a b == 0
-
-      let hash p =
-        Hashset.Combine.combinesmall p.proj_arg (Ind.CanOrd.hash p.proj_ind)
-    end
     module CanOrd = struct
       type nonrec t = t
 
@@ -954,15 +917,6 @@ struct
 
   let hash (c, b) = (if b then 1 else 0) + Repr.hash c
 
-  module SyntacticOrd = struct
-    type nonrec t = t
-    let compare (p, b) (p', b') =
-      let c = Bool.compare b b' in
-      if c <> 0 then c else Repr.SyntacticOrd.compare p p'
-    let equal (c, b as x) (c', b' as x') =
-      x == x' || b = b' && Repr.SyntacticOrd.equal c c'
-    let hash (c, b) = (if b then 1 else 0) + Repr.SyntacticOrd.hash c
-  end
   module CanOrd = struct
     type nonrec t = t
     let compare (p, b) (p', b') =
@@ -1104,14 +1058,6 @@ module GlobRef = struct
     let hash gr = GlobRefInternal.global_hash_gen Constant.UserOrd.hash Ind.UserOrd.hash Construct.UserOrd.hash gr
   end
 
-  module SyntacticOrd = struct
-    type t = GlobRefInternal.t
-    let compare gr1 gr2 =
-      GlobRefInternal.global_ord_gen Constant.SyntacticOrd.compare Ind.SyntacticOrd.compare Construct.SyntacticOrd.compare gr1 gr2
-    let equal gr1 gr2 = GlobRefInternal.global_eq_gen Constant.SyntacticOrd.equal Ind.SyntacticOrd.equal Construct.SyntacticOrd.equal gr1 gr2
-    let hash gr = GlobRefInternal.global_hash_gen Constant.SyntacticOrd.hash Ind.SyntacticOrd.hash Construct.SyntacticOrd.hash gr
-  end
-
   let canonize gr = match gr with
   | VarRef _ -> gr
   | ConstRef c ->
@@ -1152,3 +1098,12 @@ type lname = Name.t CAst.t
 type lstring = string CAst.t
 
 let lident_eq = CAst.eq Id.equal
+
+(** Deprecated *)
+module Label =
+struct
+  include Id
+  let make = Id.of_string
+  let of_id id = id
+  let to_id id = id
+end

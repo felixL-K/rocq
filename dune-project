@@ -13,7 +13,7 @@
 (generate_opam_files true)
 
 (license LGPL-2.1-only)
-(maintainers "The Rocq development team <coqdev@inria.fr>")
+(maintainers "The Rocq development team <rocq+rocq-development@discoursemail.com>")
 (authors "The Rocq development team, INRIA, CNRS, and contributors")
 ; This generates bug-reports and dev-repo
 (source (github rocq-prover/rocq))
@@ -27,7 +27,7 @@
  (name rocq-runtime)
  (depends
   (ocaml (>= 4.14.0))
-  (ocamlfind (>= 1.9.1))
+  (ocamlfind (and (>= 1.9.1) (or (>= 1.9.8) (<> :os "windows"))))
   (zarith (>= 1.11))
   (conf-linux-libc-dev (= :os "linux")))
  (conflicts
@@ -57,8 +57,8 @@ prelude, now living in the rocq-core package."))
  (name rocq-devtools)
  (depends
   (rocq-runtime (= :version))
-   yojson
-   camlzip)
+  (yojson (>= 2.0))
+  camlzip)
  (synopsis "Development tools for Rocq")
  (description "The Rocq Prover is an interactive theorem prover, or proof assistant. It provides
 a formal language to write mathematical definitions, executable

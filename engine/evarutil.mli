@@ -34,10 +34,7 @@ sig
   val variables : Environ.env -> t
 end
 
-type naming_mode =
-  | RenameExistingBut of VarSet.t
-  | FailIfConflict
-  | ProgramNaming of VarSet.t
+type naming_mode = VarSet.t
 
 val new_evar :
   ?src:Evar_kinds.t Loc.located -> ?filter:Filter.t ->
@@ -45,6 +42,7 @@ val new_evar :
   ?abstract_arguments:Abstraction.t -> ?candidates:constr list ->
   ?naming:intro_pattern_naming_expr ->
   ?typeclass_candidate:bool ->
+  ?rrpat:bool ->
   ?hypnaming:naming_mode ->
   env -> evar_map -> types -> evar_map * EConstr.t
 
@@ -55,6 +53,7 @@ val new_pure_evar :
   ?abstract_arguments:Abstraction.t -> ?candidates:constr list ->
   ?name:Id.t ->
   ?typeclass_candidate:bool ->
+  ?rrpat:bool ->
   named_context_val -> evar_map -> types -> evar_map * Evar.t
 
 (** Create a new Type existential variable, as we keep track of
@@ -239,6 +238,8 @@ type ext_named_context =
   csubst * Id.Set.t * named_context_val
 
 val default_ext_instance : ext_named_context -> constr SList.t
+
+val ext_rev_subst : ext_named_context -> Id.t -> constr
 
 val push_rel_decl_to_named_context : hypnaming:naming_mode ->
   evar_map -> rel_declaration -> ext_named_context -> ext_named_context

@@ -29,19 +29,27 @@ let blacklist_table = Summary.ref Id.Set.empty ~name:"ExtrBlacklist"
 (** Sets and maps for [global_reference] that use the "user" [kernel_name]
     instead of the canonical one *)
 
-module Refmap' = GlobRef.Map_env
-module Refset' = GlobRef.Set_env
+module GlobOrd =
+struct
+  type t = global
+  let compare g1 g2 =
+    let c = GlobRef.UserOrd.compare g1.glob g2.glob in
+    if Int.equal c 0 then InfvInst.compare g1.inst g2.inst else c
+end
+
+module Refmap' = CMap.Make(GlobOrd)
+module Refset' = Set.Make(GlobOrd)
 
 (*S Utilities about [module_path] and [kernel_names] and [global_reference] *)
 
-let occur_kn_in_ref kn = let open GlobRef in function
+let occur_kn_in_ref kn r = let open GlobRef in match r.glob with
   | IndRef (kn',_)
   | ConstructRef ((kn',_),_) -> MutInd.CanOrd.equal kn kn'
   | ConstRef _ | VarRef _ -> false
 
 (* Return the "canonical" name used for declaring a name *)
 
-let repr_of_r = let open GlobRef in function
+let repr_of_r r = let open GlobRef in match r.glob with
   | ConstRef kn -> Constant.user kn
   | IndRef (kn,_)
   | ConstructRef ((kn,_),_) -> MutInd.user kn
@@ -81,8 +89,8 @@ let mp_length mp =
   in len mp
 
 let rec prefixes_mp mp = match mp with
-  | MPdot (mp',_) -> MPset.add mp (prefixes_mp mp')
-  | _ -> MPset.singleton mp
+  | MPdot (mp',_) -> ModPath.Set.add mp (prefixes_mp mp')
+  | _ -> ModPath.Set.singleton mp
 
 let rec get_nth_label_mp n = function
   | MPdot (mp,l) -> if Int.equal n 1 then l else get_nth_label_mp (n-1) mp
@@ -92,7 +100,7 @@ let common_prefix_from_list mp0 mpl =
   let prefixes = prefixes_mp mp0 in
   let rec f = function
     | [] -> None
-    | mp :: l -> if MPset.mem mp prefixes then Some mp else f l
+    | mp :: l -> if ModPath.Set.mem mp prefixes then Some mp else f l
   in f mpl
 
 let rec parse_labels2 ll = function
@@ -112,21 +120,23 @@ let labels_of_ref r =
 (* We use [constant_body] (resp. [mutual_inductive_body]) as checksum
    to ensure that the table contents aren't outdated. *)
 
+module InfvMap = Map.Make(InfvInst)
+
 type table = {
-  typedefs : (constant_body * ml_type) Cmap_env.t;
-  cst_types : (constant_body * ml_schema) Cmap_env.t;
-  inductives : (mutual_inductive_body * ml_ind) Mindmap_env.t;
-  inductive_kinds : inductive_kind Mindmap_env.t;
-  recursors : KNset.t;
+  typedefs : (constant_body * ml_type) InfvMap.t Cmap_env.t;
+  cst_types : (constant_body * ml_schema) InfvMap.t Cmap_env.t;
+  inductives : (mutual_inductive_body * ml_ind) InfvMap.t Mindmap_env.t;
+  inductive_kinds : inductive_kind InfvMap.t Mindmap_env.t;
+  recursors : KerName.Set.t;
   (* recursors: we can use the equivalence between canonical and user constant names. *)
-  projs : (inductive * int) GlobRef.Map.t;
+  projs : GlobRef.Set_env.t;
   (* projs: working modulo name equivalence is ok *)
   info_axioms : Refset'.t;
   log_axioms : Refset'.t;
-  symbols : Label.t list Refmap'.t;
+  symbols : Id.t list Refmap'.t;
   opaques:  Refset'.t;
   modfile_ids : Id.Set.t;
-  modfile_mps : pp_tag MPmap.t;
+  modfile_mps : string DirPath.Map.t;
 }
 
 type t = table ref
@@ -136,56 +146,72 @@ let empty_table = {
   cst_types = Cmap_env.empty;
   inductives = Mindmap_env.empty;
   inductive_kinds = Mindmap_env.empty;
-  recursors = KNset.empty;
-  projs = GlobRef.Map.empty;
+  recursors = KerName.Set.empty;
+  projs = GlobRef.Set_env.empty;
   info_axioms = Refset'.empty;
   log_axioms = Refset'.empty;
   symbols = Refmap'.empty;
   opaques = Refset'.empty;
   modfile_ids = Id.Set.empty;
-  modfile_mps = MPmap.empty;
+  modfile_mps = DirPath.Map.empty;
 }
 
 let make_table () = ref { empty_table with modfile_ids = !blacklist_table }
 
-let add_typedef table kn cb t =
-  table := { !table with typedefs = Cmap_env.add kn (cb,t) !table.typedefs }
+let add_typedef table kn inst cb t =
+  let upd = function
+  | None -> Some (InfvMap.singleton inst (cb, t))
+  | Some map -> Some (InfvMap.add inst (cb, t) map)
+  in
+  table := { !table with typedefs = Cmap_env.update kn upd !table.typedefs }
 
-let lookup_typedef table kn cb =
+let lookup_typedef table kn inst cb =
   try
-    let (cb0,t) = Cmap_env.find kn !table.typedefs in
+    let (cb0, t) = InfvMap.find inst (Cmap_env.find kn !table.typedefs) in
     if cb0 == cb then Some t else None
   with Not_found -> None
 
-let add_cst_type table kn cb s =
-  table := { !table with cst_types = Cmap_env.add kn (cb,s) !table.cst_types }
+let add_cst_type table kn inst cb s =
+  let upd = function
+  | None -> Some (InfvMap.singleton inst (cb, s))
+  | Some map -> Some (InfvMap.add inst (cb, s) map)
+  in
+  table := { !table with cst_types = Cmap_env.update kn upd !table.cst_types }
 
-let lookup_cst_type table kn cb =
+let lookup_cst_type table kn inst cb =
   try
-    let (cb0,s) = Cmap_env.find kn !table.cst_types in
+    let (cb0, s) = InfvMap.find inst (Cmap_env.find kn !table.cst_types) in
     if cb0 == cb then Some s else None
   with Not_found -> None
 
-let add_ind table kn mib ml_ind =
-  table := { !table with inductives = Mindmap_env.add kn (mib,ml_ind) !table.inductives }
+let add_ind table kn inst mib ml_ind =
+  let upd = function
+  | None -> Some (InfvMap.singleton inst (mib, ml_ind))
+  | Some map -> Some (InfvMap.add inst (mib, ml_ind) map)
+  in
+  table := { !table with inductives = Mindmap_env.update kn upd !table.inductives }
 
-let lookup_ind table kn mib =
+let lookup_ind table kn inst mib =
   try
-    let (mib0,ml_ind) = Mindmap_env.find kn !table.inductives in
+    let (mib0, ml_ind) = InfvMap.find inst (Mindmap_env.find kn !table.inductives) in
     if mib == mib0 then Some ml_ind
     else None
   with Not_found -> None
 
-let add_inductive_kind table kn k =
-  table := { !table with inductive_kinds = Mindmap_env.add kn k !table.inductive_kinds }
+let add_inductive_kind table kn inst k =
+  let upd = function
+  | None -> Some (InfvMap.singleton inst k)
+  | Some map -> Some (InfvMap.add inst k map)
+  in
+  table := { !table with inductive_kinds = Mindmap_env.update kn upd !table.inductive_kinds }
 
 let is_coinductive table r =
-  let kn = let open GlobRef in match r with
+  let kn = let open GlobRef in match r.glob with
     | ConstructRef ((kn,_),_) -> kn
     | IndRef (kn,_) -> kn
     | _ -> assert false
   in
-  try Mindmap_env.find kn !table.inductive_kinds == Coinductive
+  try InfvMap.find r.inst (Mindmap_env.find kn !table.inductive_kinds) == Coinductive
   with Not_found -> false
 
 let is_coinductive_type table = function
@@ -193,12 +219,12 @@ let is_coinductive_type table = function
   | _ -> false
 
 let get_record_fields table r =
-  let kn = let open GlobRef in match r with
+  let kn = let open GlobRef in match r.glob with
     | ConstructRef ((kn,_),_) -> kn
     | IndRef (kn,_) -> kn
     | _ -> assert false
   in
-  try match Mindmap_env.find kn !table.inductive_kinds with
+  try match InfvMap.find r.inst (Mindmap_env.find kn !table.inductive_kinds) with
     | Record f -> f
     | _ -> []
   with Not_found -> []
@@ -210,7 +236,7 @@ let record_fields_of_type table = function
 let add_recursors table env ind =
   let kn = MutInd.canonical ind in
   let mk_kn id =
-    KerName.make (KerName.modpath kn) (Label.of_id id)
+    KerName.make (KerName.modpath kn) id
   in
   let mib = Environ.lookup_mind ind env in
   Array.iter
@@ -218,17 +244,15 @@ let add_recursors table env ind =
        let id = mip.mind_typename in
        let kn_rec = mk_kn (Nameops.add_suffix id "_rec")
        and kn_rect = mk_kn (Nameops.add_suffix id "_rect") in
-       table := { !table with recursors = KNset.add kn_rec (KNset.add kn_rect !table.recursors) })
+       table := { !table with recursors = KerName.Set.add kn_rec (KerName.Set.add kn_rect !table.recursors) })
     mib.mind_packets
 
-let is_recursor table = function
-  | GlobRef.ConstRef c -> KNset.mem (Constant.canonical c) !table.recursors
+let is_recursor table r = match r.glob with
+  | GlobRef.ConstRef c -> KerName.Set.mem (Constant.canonical c) !table.recursors
   | _ -> false
 
-let add_projection table n kn ip = table := { !table with projs = GlobRef.Map.add (GlobRef.ConstRef kn) (ip,n) !table.projs }
-let is_projection table r = GlobRef.Map.mem r !table.projs
-let projection_arity table r = snd (GlobRef.Map.find r !table.projs)
-let projection_info table r = GlobRef.Map.find r !table.projs
+let add_projection table n kn ip = table := { !table with projs = GlobRef.Set_env.add (GlobRef.ConstRef kn) !table.projs }
+let is_projection table r = GlobRef.Set_env.mem r.glob !table.projs
 
 (*s Table of used axioms *)
 
@@ -249,20 +273,6 @@ Nota:
  - Extraction Library : modular, library
 *)
 
-let modular_ref = ref false
-let library_ref = ref false
-
-let set_modular b = modular_ref := b
-let modular () = !modular_ref
-
-let set_library b = library_ref := b
-let library () = !library_ref
-
-let extrcompute = ref false
-
-let set_extrcompute b = extrcompute := b
-let is_extrcompute () = !extrcompute
-
 (*s Printing. *)
 
 (* The following functions work even on objects not in [Global.env ()].
@@ -274,15 +284,16 @@ let safe_basename_of_global_gen table r =
   let last_chance r (kn, pos) =
     try Nametab.basename_of_global r
     with Not_found ->
-      let id = Id.to_string (Label.to_id (MutInd.label kn)) in
+      let id = Id.to_string (MutInd.label kn) in
       Id.of_string (id ^ "_" ^ String.concat "_" (List.map string_of_int pos))
   in
-  let unsafe_lookup_ind table kn = snd (Mindmap_env.find kn !table.inductives) in
+  let unsafe_lookup_ind table kn = snd (InfvMap.find r.inst (Mindmap_env.find kn !table.inductives)) in
   let open GlobRef in
-  match r with
-    | ConstRef kn -> Label.to_id (Constant.label kn)
-    | IndRef (kn,0) -> Label.to_id (MutInd.label kn)
+  match r.glob with
+    | ConstRef kn -> Constant.label kn
+    | IndRef (kn,0) -> MutInd.label kn
     | IndRef (kn,i) ->
+      let r = r.glob in
       begin match table with
       | None -> last_chance r (kn, [i])
       | Some table ->
@@ -290,6 +301,7 @@ let safe_basename_of_global_gen table r =
         with Not_found -> last_chance r (kn, [i])
       end
     | ConstructRef ((kn,i),j) ->
+      let r = r.glob in
       begin match table with
       | None -> last_chance r (kn, [i; j])
       | Some table ->
@@ -300,8 +312,8 @@ let safe_basename_of_global_gen table r =
 
 let safe_basename_of_global table r = safe_basename_of_global_gen (Some table) r
 
-let string_of_global r =
- try string_of_qualid (Nametab.shortest_qualid_of_global Id.Set.empty r)
+let string_of_global r  =
+ try string_of_qualid (Nametab.shortest_qualid_of_global Id.Set.empty r.glob)
  with Not_found -> Id.to_string (safe_basename_of_global_gen None r)
 
 let safe_pr_global r = str (string_of_global r)
@@ -309,11 +321,11 @@ let safe_pr_global r = str (string_of_global r)
 (* idem, but with qualification, and only for constants. *)
 
 let safe_pr_long_global r =
-  try Printer.pr_global r
-  with Not_found -> match r with
+  try Printer.pr_global r.glob
+  with Not_found -> match r.glob with
     | GlobRef.ConstRef kn ->
         let mp,l = KerName.repr (Constant.user kn) in
-        str ((ModPath.to_string mp)^"."^(Label.to_string l))
+        str ((ModPath.to_string mp)^"."^(Id.to_string l))
     | _ -> assert false
 
 let pr_long_mp mp =
@@ -350,7 +362,7 @@ let warn_extraction_symbols =
   let pp_symb_with_rules (symb, rules) =
     safe_pr_global symb ++
     if List.is_empty rules then str " (no rules)" else
-    str ":" ++ spc() ++ prlist_with_sep spc Label.print rules
+    str ":" ++ spc() ++ prlist_with_sep spc Id.print rules
   in
   CWarnings.create ~name:"extraction-symbols" ~category:CWarnings.CoreCategories.extraction
     (fun symbols ->
@@ -393,18 +405,16 @@ let warning_opaques table accessed =
     else warn_extraction_opaque_as_axiom lst
 
 let warning_ambiguous_name =
-  CWarnings.create_with_quickfix ~name:"extraction-ambiguous-name" ~category:CWarnings.CoreCategories.extraction
-    (fun (q,mp,r) -> strbrk "The name " ++ pr_qualid q ++ strbrk " is ambiguous, " ++
-                       strbrk "do you mean module " ++
-                       pr_long_mp mp ++
-                       strbrk " or object " ++
-                       pr_long_global r ++ str " ?" ++ fnl () ++
-                       strbrk "First choice is assumed, for the second one please use " ++
-                       strbrk "fully qualified name." ++ fnl ())
-let warning_ambiguous_name ?loc (_,mp,r as x) =
-  match loc with
-  | None -> warning_ambiguous_name x
-  | Some loc -> warning_ambiguous_name ~loc ~quickfix:(List.map (Quickfix.make ~loc) [pr_long_mp mp;pr_long_global r]) x
+  CWarnings.create ~name:"extraction-ambiguous-name" ~category:CWarnings.CoreCategories.extraction
+    ~quickfix:(fun ~loc (_,mp,r) -> List.map (Quickfix.make ~loc) [pr_long_mp mp;pr_long_global r])
+    (fun (q,mp,r) ->
+       strbrk "The name " ++ pr_qualid q ++ strbrk " is ambiguous, " ++
+       strbrk "do you mean module " ++
+       pr_long_mp mp ++
+       strbrk " or object " ++
+       pr_long_global r ++ str " ?" ++ fnl () ++
+       strbrk "First choice is assumed, for the second one please use " ++
+       strbrk "fully qualified name." ++ fnl ())
 
 let error_axiom_scheme ?loc r i =
   err ?loc (str "The type scheme axiom " ++ spc () ++
@@ -444,7 +454,9 @@ let error_no_module_expr mp =
        ++ str "This situation is currently unsupported by the extraction.")
 
 let error_singleton_become_prop ind =
-  err (str "The informative inductive type " ++ safe_pr_global (IndRef ind) ++
+  (* Should be fine, only used for printing and with template poly inductives *)
+  let ind = { glob = IndRef ind; inst = InfvInst.empty } in
+  err (str "The informative inductive type " ++ safe_pr_global ind ++
        str " has a Prop instance" ++ str "." ++ fnl () ++
        str "This happens when a sort-polymorphic singleton inductive type\n" ++
        str "has logical parameters, such as (I,I) : (True * True) : Prop.\n" ++
@@ -473,7 +485,7 @@ let error_MPfile_as_mod mp b =
 
 let argnames_of_global r =
   let env = Global.env () in
-  let typ, _ = Typeops.type_of_global_in_context env r in
+  let typ, _ = Typeops.type_of_global_in_context env r.glob in
   let rels,_ =
     decompose_prod (Reduction.whd_all env typ) in
   List.rev_map (fun x -> Context.binder_name (fst x)) rels
@@ -718,32 +730,39 @@ let add_callback_entry alias_opt qualid_ref =
 
 (* Registration of operations for rollback. *)
 
-let inline_extraction : bool * GlobRef.t list -> obj =
+let subst_global s g = { glob = fst (subst_global s g.glob); inst = g.inst }
+
+let inline_extraction : bool * global list -> obj =
   declare_object @@ superglobal_object "Extraction Inline"
     ~cache:(fun (b,l) -> add_inline_entries b l)
-    ~subst:(Some (fun (s,(b,l)) -> (b,(List.map (fun x -> fst (subst_global s x)) l))))
+    ~subst:(Some (fun (s,(b,l)) -> (b,(List.map (fun x -> subst_global s x) l))))
     ~discharge:(fun x -> Some x)
 
-let foreign_extraction : GlobRef.t list -> obj =
+let foreign_extraction : global list -> obj =
   declare_object @@ superglobal_object "Extraction Foreign"
     ~cache:(fun l -> add_foreign_entries l)
-    ~subst:(Some (fun (s,l) -> (List.map (fun x -> fst (subst_global s x)) l)))
+    ~subst:(Some (fun (s,l) -> (List.map (fun x -> subst_global s x) l)))
     ~discharge:(fun x -> Some x)
 
-let callback_extraction : string option * GlobRef.t -> obj =
+let callback_extraction : string option * global -> obj =
   declare_object @@ superglobal_object "Extraction Callback"
     ~cache:(fun (alias, x) -> add_callback_entry alias x)
-    ~subst:(Some (fun (s,(alias, x)) -> (alias, (fst (subst_global s x)))))
+    ~subst:(Some (fun (s,(alias, x)) -> (alias, subst_global s x)))
     ~discharge:(fun x -> Some x)
 
 
 
 (* Grammar entries. *)
 
+let mono_global_with_alias qid =
+  let gr = Smartlocate.global_with_alias qid in
+  let inst = Environ.universes_of_global (Global.env ()) gr in
+  List.map (fun inst -> { glob = gr; inst }) (InfvInst.generate inst)
+
 let extraction_inline b l =
-  let refs = List.map Smartlocate.global_with_alias l in
+  let refs = List.map_append mono_global_with_alias l in
   List.iter
-    (fun r -> match r with
+    (fun r -> match r.glob with
        | GlobRef.ConstRef _ -> ()
        | _ -> error_constant r) refs;
   Lib.add_leaf (inline_extraction (b,refs))
@@ -752,7 +771,7 @@ let extraction_inline b l =
 
 let print_extraction_inline () =
   let (i,n)= !inline_table in
-  let i'= Refset'.filter (function GlobRef.ConstRef _ -> true | _ -> false) i in
+  let i'= Refset'.filter (function { glob = GlobRef.ConstRef _ } -> true | _ -> false) i in
     (str "Extraction Inline:" ++ fnl () ++
      Refset'.fold
        (fun r p ->
@@ -823,37 +842,35 @@ let add_implicits r l =
 
 (* Registration of operations for rollback. *)
 
-let implicit_extraction : GlobRef.t * int_or_id list -> obj =
+let implicit_extraction : global * int_or_id list -> obj =
   declare_object @@ superglobal_object_nodischarge "Extraction Implicit"
     ~cache:(fun (r,l) -> add_implicits r l)
-    ~subst:(Some (fun (s,(r,l)) -> (fst (subst_global s r), l)))
+    ~subst:(Some (fun (s,(r,l)) -> (subst_global s r, l)))
 
 (* Grammar entries. *)
 
 let extraction_implicit r l =
   check_inside_section ();
-  Lib.add_leaf (implicit_extraction (Smartlocate.global_with_alias r,l))
+  let r = mono_global_with_alias r in
+  List.iter (fun r -> Lib.add_leaf (implicit_extraction (r, l))) r
 
 let string_of_modfile table mp =
-  try MPmap.find mp !table.modfile_mps
+  try DirPath.Map.find mp !table.modfile_mps
   with Not_found ->
-    let id = Id.of_string (raw_string_of_modfile mp) in
+    let id = Id.of_string (raw_string_of_modfile (MPfile mp)) in
     let id' = next_ident_away id !table.modfile_ids in
     let s' = Id.to_string id' in
     table := { !table with
       modfile_ids = Id.Set.add id' !table.modfile_ids;
-      modfile_mps = MPmap.add mp s' !table.modfile_mps;
+      modfile_mps = DirPath.Map.add mp s' !table.modfile_mps;
     };
     s'
 
 (* same as [string_of_modfile], but preserves the capital/uncapital 1st char *)
 
-let file_of_modfile table mp =
-  let s0 = match mp with
-    | MPfile f -> Id.to_string (List.hd (DirPath.repr f))
-    | _ -> assert false
-  in
-  String.mapi (fun i c -> if i = 0 then s0.[0] else c) (string_of_modfile table mp)
+let file_of_modfile table dp =
+  let s0 = Id.to_string (List.hd (DirPath.repr dp)) in
+  String.mapi (fun i c -> if i = 0 then s0.[0] else c) (string_of_modfile table dp)
 
 let add_blacklist_entries l =
   blacklist_table :=
@@ -917,8 +934,8 @@ let indref_of_match pv =
   if Array.is_empty pv then raise Not_found;
   let (_,pat,_) = pv.(0) in
   match pat with
-    | Pusual (GlobRef.ConstructRef (ip,_)) -> GlobRef.IndRef ip
-    | Pcons (GlobRef.ConstructRef (ip,_),_) -> GlobRef.IndRef ip
+    | Pusual { glob = GlobRef.ConstructRef (ip,_); inst } -> { glob = GlobRef.IndRef ip; inst }
+    | Pcons ({ glob = GlobRef.ConstructRef (ip,_); inst }, _) -> { glob = GlobRef.IndRef ip; inst }
     | _ -> raise Not_found
 
 let is_custom_match pv =
@@ -931,7 +948,7 @@ let find_custom_match pv =
 (* Printing entries *)
 
 let print_constref_extractions ref_set val_lookup_f section_str =
-  let i'= Refset'.filter (function GlobRef.ConstRef _ -> true | _ -> false) ref_set in
+  let i'= Refset'.filter (function { glob = GlobRef.ConstRef _ } -> true | _ -> false) ref_set in
       (str section_str ++ fnl () ++
        Refset'.fold
          (fun r p ->
@@ -950,15 +967,15 @@ let print_extraction_callback () =
 
 (* Registration of operations for rollback. *)
 
-let in_customs : GlobRef.t * string list * string -> obj =
+let in_customs : global * string list * string -> obj =
   declare_object @@ superglobal_object_nodischarge "ML extractions"
     ~cache:(fun (r,ids,s) -> add_custom r ids s)
-    ~subst:(Some (fun (s,(r,ids,str)) -> (fst (subst_global s r), ids, str)))
+    ~subst:(Some (fun (s,(r,ids,str)) -> (subst_global s r, ids, str)))
 
-let in_custom_matchs : GlobRef.t * string -> obj =
+let in_custom_matchs : global * string -> obj =
   declare_object @@ superglobal_object_nodischarge "ML extractions custom matches"
     ~cache:(fun (r,s) -> add_custom_match r s)
-    ~subst:(Some (fun (subs,(r,s)) -> (fst (subst_global subs r), s)))
+    ~subst:(Some (fun (subs,(r,s)) -> (subst_global subs r, s)))
 
 (* Grammar entries. *)
 
@@ -966,18 +983,21 @@ let extract_callback optstr x =
   if lang () != Ocaml then
       CErrors.user_err (Pp.str "Extract Callback is supported only for OCaml extraction.");
 
-  let qualid_ref = Smartlocate.global_with_alias x in
-  match qualid_ref with
+  let refs = mono_global_with_alias x in
+  List.iter begin fun qualid_ref ->
+  match qualid_ref.glob with
       (* Add the alias and qualid_ref to callback extraction.*)
     | GlobRef.ConstRef _ -> Lib.add_leaf (callback_extraction (optstr, qualid_ref))
     | _                  -> error_constant ?loc:x.CAst.loc qualid_ref
+  end refs
 
 let extract_constant_generic r ids s arity_handler (is_redef, redef_msg) extr_type =
   check_inside_section ();
-  let g = Smartlocate.global_with_alias r in
-  match g with
+  let g = mono_global_with_alias r in
+  List.iter begin fun g -> match g.glob with
     | GlobRef.ConstRef kn ->
         let env = Global.env () in
+        (* FIXME: substitute ground instance *)
         let typ, _ = Typeops.type_of_global_in_context env (GlobRef.ConstRef kn) in
         let typ = Reduction.whd_all env typ in
         if Reduction.is_arity env typ then arity_handler env typ g;
@@ -987,6 +1007,7 @@ let extract_constant_generic r ids s arity_handler (is_redef, redef_msg) extr_ty
         Lib.add_leaf (extr_type g);
         Lib.add_leaf (in_customs (g,ids,s));
     | _ -> error_constant ?loc:r.CAst.loc g
+  end g
 
 let extract_constant_inline inline r ids s =
   let arity_handler env typ g =
@@ -1007,9 +1028,10 @@ let extract_constant_foreign r s =
 
 let extract_inductive r s l optstr =
   check_inside_section ();
-  let g = Smartlocate.global_with_alias r in
-  Dumpglob.add_glob ?loc:r.CAst.loc g;
-  match g with
+  let g = mono_global_with_alias r in
+  List.iter begin fun g ->
+  Dumpglob.add_glob ?loc:r.CAst.loc g.glob;
+  match g.glob with
     | GlobRef.IndRef ((kn,i) as ip) ->
         let mib = Global.lookup_mind kn in
         let n = Array.length mib.mind_packets.(i).mind_consnames in
@@ -1020,7 +1042,8 @@ let extract_inductive r s l optstr =
           optstr;
         List.iteri
           (fun j s ->
-             let g = GlobRef.ConstructRef (ip,succ j) in
+             let g = { glob = GlobRef.ConstructRef (ip,succ j); inst = g.inst } in
              Lib.add_leaf (inline_extraction (true,[g]));
              Lib.add_leaf (in_customs (g,[],s))) l
     | _ -> error_inductive ?loc:r.CAst.loc g
+  end g

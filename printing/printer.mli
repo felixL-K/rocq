@@ -103,6 +103,7 @@ val pr_type_env            : ?goal_concl_style:bool -> env -> evar_map -> types 
 
 val pr_closed_glob_n_env   : ?goal_concl_style:bool -> ?inctx:bool -> ?scope:scope_name -> env -> evar_map -> Constrexpr.entry_relative_level -> closed_glob_constr -> Pp.t
 val pr_closed_glob_env     : ?goal_concl_style:bool -> ?inctx:bool -> ?scope:scope_name -> env -> evar_map -> closed_glob_constr -> Pp.t
+val pr_closed_lglob_env    : ?goal_concl_style:bool -> ?inctx:bool -> ?scope:scope_name -> env -> evar_map -> closed_glob_constr -> Pp.t
 
 val pr_ljudge_env          : env -> evar_map -> EConstr.unsafe_judgment -> Pp.t * Pp.t
 
@@ -110,9 +111,13 @@ val pr_lglob_constr_env    : env -> evar_map -> 'a glob_constr_g -> Pp.t
 
 val pr_glob_constr_env     : env -> evar_map -> 'a glob_constr_g -> Pp.t
 
-val pr_lconstr_pattern_env : env -> evar_map -> _ constr_pattern_r -> Pp.t
+val pr_lconstr_pattern_env : env -> evar_map -> constr_pattern -> Pp.t
 
-val pr_constr_pattern_env  : env -> evar_map -> _ constr_pattern_r -> Pp.t
+val pr_constr_pattern_env  : env -> evar_map -> constr_pattern -> Pp.t
+
+val pr_uninstantiated_lconstr_pattern_env : env -> evar_map -> uninstantiated_pattern -> Pp.t
+
+val pr_uninstantiated_constr_pattern_env  : env -> evar_map -> uninstantiated_pattern -> Pp.t
 
 val pr_cases_pattern       : cases_pattern -> Pp.t
 
@@ -217,7 +222,7 @@ type axiom =
 
 type context_object =
   | Variable of Id.t (* A section variable or a Let definition *)
-  | Axiom of axiom * (Label.t * Constr.rel_context * types) list
+  | Axiom of axiom * (GlobRef.t * Constr.rel_context * types) list
   | Opaque of Constant.t     (* An opaque constant. *)
   | Transparent of Constant.t
 

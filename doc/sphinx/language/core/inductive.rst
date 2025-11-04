@@ -1,3 +1,5 @@
+.. _inductive:
+
 Inductive types and recursive functions
 =======================================
 
@@ -29,7 +31,7 @@ Inductive types
    .. insertprodn inductive_definition constructor
 
    .. prodn::
-      inductive_definition ::= @ident {? @cumul_univ_decl } {* @binder } {? %| {* @binder } } {? : @type } := {? %| } {+| @constructor } {? @decl_notations }
+      inductive_definition ::= @ident {? @cumul_univ_decl } {* @binder } {? %| {* @binder } } {? : @type } := {? {? %| } {+| @constructor } } {? @decl_notations }
       constructor ::= {* #[ {+, @attribute } ] } @ident {* @binder } {? @of_type_inst }
 
    Defines one or more
@@ -422,7 +424,7 @@ only support the :n:`struct` option, while :n:`wf` and :n:`measure` are only sup
 commands such as :cmd:`Fixpoint` (with the :attr:`program` attribute) and :cmd:`Function`.
 
 .. todo explanation of struct: see text above at the Fixpoint command, also
-   see https://github.com/coq/coq/pull/12936#discussion_r510716268 and above.
+   see https://github.com/rocq-prover/rocq/pull/12936#discussion_r510716268 and above.
    Consider whether to move the grammar for fixannot elsewhere
 
 .. _Fixpoint:

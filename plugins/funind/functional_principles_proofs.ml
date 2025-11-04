@@ -20,6 +20,7 @@ open Namegen
 open Names
 open Pp
 open Tactics
+open FixTactics
 open Induction
 open Indfun_common
 open Libnames
@@ -87,7 +88,7 @@ let is_incompatible_eq env sigma t =
       | _ -> false
     with e when CErrors.noncritical e -> false
   in
-  if res then observe (str "is_incompatible_eq " ++ pr_leconstr_env env sigma t);
+  if res then observe (fun () -> str "is_incompatible_eq " ++ pr_leconstr_env env sigma t);
   res
 
 let pf_get_new_id id env =
@@ -138,7 +139,7 @@ let isAppConstruct env sigma t =
   try
     let t', l = find_rectype env sigma t in
     observe
-      ( str "isAppConstruct : "
+      (fun () -> str "isAppConstruct : "
       ++ Printer.pr_leconstr_env env sigma t
       ++ str " -> "
       ++ Printer.pr_leconstr_env env sigma (applist (t', l)) );
@@ -150,7 +151,7 @@ exception NoChange
 let change_eq env sigma hyp_id (context : rel_context) x t end_of_type =
   let nochange ?t' msg =
     observe
-      ( str ("Not treating ( " ^ msg ^ " )")
+      (fun () -> str ("Not treating ( " ^ msg ^ " )")
       ++ pr_leconstr_env env sigma t
       ++ str "    "
       ++
@@ -521,7 +522,7 @@ let treat_new_case ptes_infos nb_prod continue_tac term dyn_infos =
                            | App (f, [|_; _; args2|]) -> args2
                            | _ ->
                              observe
-                               ( str "cannot compute new term value : "
+                               (fun () -> str "cannot compute new term value : "
                                ++ Tacmach.pr_gls g' ++ fnl ()
                                ++ str "last hyp is"
                                ++ pr_leconstr_env env sigma new_term_value_eq );
@@ -867,7 +868,7 @@ let generate_equation_lemma env evd fnames f fun_num nb_params nb_args rec_args_
   let eqn = mkApp (Lazy.force eq, [|type_of_f; eq_lhs; eq_rhs|]) in
   let lemma_type = it_mkProd_or_LetIn eqn type_ctxt in
   (* Pp.msgnl (str "lemma type " ++ Printer.pr_lconstr lemma_type ++ fnl () ++ str "f_body " ++ Printer.pr_lconstr f_body); *)
-  let f_id = Label.to_id (Constant.label (fst (destConst evd f))) in
+  let f_id = Constant.label (fst (destConst evd f)) in
   let prove_replacement =
     tclTHENLIST
       [ tclDO (nb_params + rec_args_num + 1) intro
@@ -887,12 +888,14 @@ let generate_equation_lemma env evd fnames f fun_num nb_params nb_args rec_args_
     Declare.CInfo.make ~name:(mk_equation_id f_id) ~typ:lemma_type ()
   in
   let lemma = Declare.Proof.start ~cinfo ~info evd in
-  let lemma, _ = Declare.Proof.by prove_replacement lemma in
+  let lemma, _ = Declare.Proof.by (Global.env ()) prove_replacement lemma in
   let (_ : _ list) =
     Declare.Proof.save_regular ~proof:lemma ~opaque:Vernacexpr.Transparent
       ~idopt:None
   in
   evd
+
+exception NoLemma
 
 let do_replace (evd : Evd.evar_map ref) params rec_arg_num rev_args_id f fun_num
     all_funs =
@@ -905,9 +908,13 @@ let do_replace (evd : Evd.evar_map ref) params rec_arg_num rev_args_id f fun_num
             | None -> raise Not_found
             | Some finfos -> finfos
           in
-          mkConst (Option.get finfos.equation_lemma)
-        with (Not_found | Option.IsNone) as e ->
-          let f_id = Label.to_id (Constant.label (fst (destConst !evd f))) in
+          let cst = match finfos.equation_lemma with
+          | None -> raise NoLemma
+          | Some cst -> cst
+          in
+          mkConst cst
+        with (Not_found | NoLemma) as e ->
+          let f_id = Constant.label (fst (destConst !evd f)) in
           (*i The next call to mk_equation_id is valid since we will construct the lemma
             Ensures by: obvious
             i*)
@@ -917,7 +924,7 @@ let do_replace (evd : Evd.evar_map ref) params rec_arg_num rev_args_id f fun_num
               (List.length rev_args_id) rec_arg_num;
           let _ =
             match e with
-            | Option.IsNone ->
+            | NoLemma ->
               let finfos =
                 match find_Function_infos (fst (destConst !evd f)) with
                 | None -> raise Not_found
@@ -1033,17 +1040,17 @@ let prove_princ_for_struct (evd : Evd.evar_map ref) interactive_proof fun_num
               f_body )
       in
       observe
-        ( str "full_params := "
+        (fun () -> str "full_params := "
         ++ prlist_with_sep spc
              (RelDecl.get_name %> Nameops.Name.get_id %> Ppconstr.pr_id)
              full_params );
       observe
-        ( str "princ_params := "
+        (fun () -> str "princ_params := "
         ++ prlist_with_sep spc
              (RelDecl.get_name %> Nameops.Name.get_id %> Ppconstr.pr_id)
              princ_params );
       observe
-        ( str "fbody_with_full_params := "
+        (fun () -> str "fbody_with_full_params := "
         ++ pr_leconstr_env (Global.env ()) !evd fbody_with_full_params );
       let all_funs_with_full_params =
         Array.map
@@ -1155,8 +1162,8 @@ let prove_princ_for_struct (evd : Evd.evar_map ref) interactive_proof fun_num
                 (fun _ _ -> str "h_fix " ++ int (this_fix_info.idx + 1))
                 (fix this_fix_info.name (this_fix_info.idx + 1))
           else
-            Tactics.mutual_fix this_fix_info.name (this_fix_info.idx + 1)
-              other_fix_infos 0
+            FixTactics.mutual_fix this_fix_info.name (this_fix_info.idx + 1)
+              other_fix_infos
       in
       let first_tac : unit Proofview.tactic =
         (* every operations until fix creations *)

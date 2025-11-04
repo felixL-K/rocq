@@ -228,7 +228,7 @@ interfere with one another, making some of them unusable. For instance, a notati
 and ``y`` at level 69 would be broken by another rule that puts
 ``y`` at another level, like ``x << y << z`` with ``x`` at level 69 and ``y``
 at level 200. To avoid such issues, you should left factorize rules, that is ensure
-that common prefixes use the samel levels.
+that common prefixes use the same levels.
 
 .. rocqtop:: all
 
@@ -263,6 +263,11 @@ of Rocq predefined notations can be found in the chapter on :ref:`thecoqlibrary`
    :name: closed-notation-not-level-0
 
    It is usually better to put closed notations, that is the ones starting and ending with a terminal symbol, at level 0.
+
+.. warn:: Notations at level 0 should be closed (first and last symbols should be terminal symbols).
+   :name: level-0-notation-not-closed
+
+   Notations at level 0 should be closed, since there is no next level for associativity.
 
 .. warn:: Postfix notations (i.e. starting with a nonterminal symbol and ending with a terminal symbol) should usually be at level 1 (default).")
    :name: postfix-notation-not-level-1
@@ -520,11 +525,11 @@ Enabling and disabling notations
       enable_notation_flag ::= all
       | only parsing
       | only printing
-      | in custom @ident
+      | in custom @qualid
       | in constr
 
    Enables or disables notations previously defined with
-   :cmd:`Notation` or :cmd:`Notation (abbreviation)`.
+   :cmd:`Notation` or :cmd:`Abbreviation`.
    Disabling a notation doesn't remove parsing rules or tokens defined by the notation.
    The command has no effect on notations reserved with :cmd:`Reserved Notation`.
    At least one of
@@ -594,6 +599,7 @@ Enabling and disabling notations
       No previously defined notation satisfies the given constraints.
 
    .. exn:: More than one interpretation bound to this notation, confirm with the "all" modifier.
+      :name: More than one interpretation bound to this notation, confirm with the all modifier
 
       Use :n:`all` to allow enabling or disabling multiple
       notations in a single command.
@@ -641,13 +647,14 @@ Displaying information about notations
 .. flag:: Printing Parentheses
 
    When this :term:`flag` is on, parentheses are printed even if
-   implied by associativity and precedence. Default is off.
+   implied by associativity and precedence (applications are still printed without parentheses, i.e. `(f x) y`
+   is printed as `f x y` regardless of this flag). Default is off.
 
 .. seealso::
 
    :flag:`Printing All` to disable other elements in addition to notations.
 
-.. cmd:: Print Notation @string {? in custom @ident }
+.. cmd:: Print Notation @string {? in custom @qualid }
 
    Displays information about the previously reserved notation string
    :token:`string`. :token:`ident`, if specified, is the name of the associated
@@ -804,17 +811,17 @@ Displaying information about notations
    Similarly, `Print Grammar tactic` includes :cmd:`Tactic Notation`\s, such as :tacn:`dintuition`.
 
    The file
-   `doc/tools/docgram/fullGrammar <http://github.com/coq/coq/blob/master/doc/tools/docgram/fullGrammar>`_
+   `doc/tools/docgram/fullGrammar <http://github.com/rocq-prover/rocq/blob/master/doc/tools/docgram/fullGrammar>`_
    in the source tree extracts the full grammar for
    Rocq (not including notations and tactic notations defined in `*.v` files nor some optionally-loaded plugins)
    in a single file with minor changes to handle nonterminals using multiple levels (described in
-   `doc/tools/docgram/README.md <http://github.com/coq/coq/blob/master/doc/tools/docgram/README.md>`_).
+   `doc/tools/docgram/README.md <http://github.com/rocq-prover/rocq/blob/master/doc/tools/docgram/README.md>`_).
    This is complete and much easier to read than the grammar source files.
-   `doc/tools/docgram/orderedGrammar <http://github.com/coq/coq/blob/master/doc/tools/docgram/orderedGrammar>`_
+   `doc/tools/docgram/orderedGrammar <http://github.com/rocq-prover/rocq/blob/master/doc/tools/docgram/orderedGrammar>`_
    has the edited grammar that's used in the documentation.
 
    Developer documentation for parsing is in
-   `dev/doc/parsing.md <http://github.com/coq/coq/blob/master/dev/doc/parsing.md>`_.
+   `dev/doc/parsing.md <http://github.com/rocq-prover/rocq/blob/master/dev/doc/parsing.md>`_.
 
 .. _locating-notations:
 
@@ -986,8 +993,7 @@ It is also possible to rely on Rocq's syntax of binders using the
 
 .. rocqtop:: in
 
-   Notation "'myforall' p , [ P , Q ] " := (forall p, P -> Q)
-     (at level 200, p binder).
+   Notation "'myforall' p , [ P , Q ] " := (forall p, P -> Q) (p binder).
 
 In this case, all of :n:`@ident`, :n:`{@ident}`, :n:`[@ident]`, :n:`@ident:@type`,
 :n:`{@ident:@type}`, :n:`[@ident:@type]`, :n:`'@pattern` can be used in place of
@@ -1022,11 +1028,6 @@ the next command fails because p does not bind in the instance of n.
 
    Fail Check (exists_different p).
 
-.. rocqtop:: in
-
-   Notation "[> a , .. , b <]" :=
-     (cons a .. (cons b nil) .., cons b .. (cons a nil) ..).
-
 Notations with expressions used both as binder and term
 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -1037,7 +1038,7 @@ binding position. Here is an example:
 
    Definition force n (P:nat -> Prop) := forall n', n' >= n -> P n'.
    Notation "▢_ n P" := (force n (fun n => P))
-     (at level 0, n name, P at level 9, format "▢_ n  P").
+     (at level 2, n name, P at level 9, format "▢_ n  P").
 
 .. rocqtop:: all
 
@@ -1049,10 +1050,10 @@ variant:
 .. rocqtop:: in reset
 
    Definition force2 q (P:nat*nat -> Prop) :=
-     (forall n', n' >= fst q -> forall p', p' >= snd q -> P q).
+     (forall n', n' >= fst q -> forall p', p' >= snd q -> P (n', p')).
 
    Notation "▢_ p P" := (force2 p (fun p => P))
-     (at level 0, p pattern at level 0, P at level 9, format "▢_ p  P").
+     (at level 2, p pattern at level 0, P at level 9, format "▢_ p  P").
 
 .. rocqtop:: all
 
@@ -1235,7 +1236,12 @@ Custom entries
 
    Defines new grammar entries, called *custom
    entries*, that can later be referred to using the entry name
-   :n:`custom @ident`.
+   :n:`custom @qualid`.
+
+   Custom entry names are qualified names based on the module they're
+   declared in: `Declare Custom Entry e` in module `M` produces an
+   entry whose full name is `M.e`, and may be accessed by the short
+   name `e` before `End M` and after `Import M`.
 
    This command supports the :attr:`local` attribute, which limits the entry to the
    current module.
@@ -1335,7 +1341,7 @@ associated with the custom entry ``expr``. The level can be omitted, as in
 in which case Rocq infer it. If the sub-expression is at a border of
 the notation (as e.g. ``x`` and ``y`` in ``x + y``), the level is
 determined by the associativity. If the sub-expression is not at the
-border of the notation (as e.g. ``e`` in ``"[ e ]``), the level is
+border of the notation (as e.g. ``e`` in ``"[ e ]"``), the level is
 inferred to be the highest level used for the entry. In particular,
 this level depends on the highest level existing in the entry at the
 time of use of the notation.
@@ -1409,7 +1415,7 @@ Similarly, to indicate that a custom entry should parse global references
 
    Notation "x" := x (in custom expr at level 0, x global).
 
-.. cmd:: Print Custom Grammar @ident
+.. cmd:: Print Custom Grammar @qualid
 
    This displays the state of the grammar for terms associated with
    the custom entry :token:`ident`.
@@ -1425,7 +1431,7 @@ Here are the syntax elements used by the various notation commands.
 
    .. prodn::
       syntax_modifier ::= at level @natural
-      | in custom @ident {? at level @natural }
+      | in custom @qualid {? at level @natural }
       | {+, @ident } {| at @level | in scope @ident }
       | @ident at @level {? @binder_interp }
       | @ident @explicit_subentry
@@ -1444,7 +1450,7 @@ Here are the syntax elements used by the various notation commands.
       | binder
       | closed binder
       | constr {? at @level } {? @binder_interp }
-      | custom @ident {? at @level } {? @binder_interp }
+      | custom @qualid {? at @level } {? @binder_interp }
       | pattern {? at level @natural }
       binder_interp ::= as ident
       | as name
@@ -1580,7 +1586,7 @@ top of the scopes stack.
    Specifying :attr:`global` behaves like the default.
 
    .. todo: Strange notion, exporting something that _removes_ a scope.
-      See https://github.com/coq/coq/pull/11718#discussion_r413667817
+      See https://github.com/rocq-prover/rocq/pull/11718#discussion_r413667817
 
 .. _LocalInterpretationRulesForNotations:
 
@@ -1596,8 +1602,8 @@ Opening a notation scope locally
 .. insertprodn term_scope term_scope
 
 .. prodn::
-   term_scope ::= @term0 % @scope_key
-   | @term0 %_ @scope_key
+   term_scope ::= @term1 % @scope_key
+   | @term1 %_ @scope_key
 
 The notation scope stack can be locally extended within
 a :token:`term` with the syntax
@@ -1887,21 +1893,15 @@ Displaying information about scopes
 Abbreviations
 --------------
 
-.. cmd:: Notation @ident {* @ident__parm } := @one_term {? ( {+, @syntax_modifier } ) }
-   :name: Notation (abbreviation)
+.. cmd:: Abbreviation @ident {* @ident__parm } := @one_term {? ( {+, @syntax_modifier } ) }
+
+   .. deprecated
+      .. cmd:: Notation @ident {* @ident__parm } := @one_term {? ( {+, @syntax_modifier } ) }
 
    .. todo: for some reason, Sphinx doesn't complain about a duplicate name if
       :name: is omitted
 
    Defines an abbreviation :token:`ident` with the parameters :n:`@ident__parm`.
-
-   This command supports the :attr:`local` attribute, which limits the notation to the
-   current module.
-
-   Unlike a :cmd:`Notation`, an abbreviation defined with the default locality
-   is available (with a fully qualified name) outside the current module even
-   when :cmd:`Import` (or one of its variants) has not been used on the current
-   :cmd:`Module`.
 
    An *abbreviation* is a name, possibly applied to arguments, that
    denotes a (presumably) more complex expression. Here are examples:
@@ -1913,7 +1913,7 @@ Abbreviations
 
    .. rocqtop:: in
 
-      Notation Nlist := (list nat).
+      Abbreviation Nlist := (list nat).
 
    .. rocqtop:: all
 
@@ -1921,7 +1921,7 @@ Abbreviations
 
    .. rocqtop:: in
 
-      Notation reflexive R := (forall x, R x x).
+      Abbreviation reflexive R := (forall x, R x x).
 
    .. rocqtop:: all
 
@@ -1930,11 +1930,25 @@ Abbreviations
 
    .. rocqtop:: in
 
-      Notation Plus1 B := (Nat.add B 1).
+      Abbreviation Plus1 B := (Nat.add B 1).
 
    .. rocqtop:: all
 
       Compute (Plus1 3).
+
+   This command supports the :attr:`local`, :attr:`export` and
+   :attr:`global` attributes. :attr:`local` limits the notation to the
+   current module or section. With :attr:`export` the abbreviation is
+   only used for printing when it is imported (but it can still be
+   accessed by its qualified name when not imported). With
+   :attr:`global` requiring the module containing the abbreviation is
+   enough to make it used by printing (NB: for "only parsing"
+   abbreviations there is no difference between :attr:`export` and
+   :attr:`global`).
+
+   The default is :attr:`export` outside sections and :attr:`local` in
+   sections, and :attr:`local` is the only supported locality in
+   sections.
 
    An abbreviation expects no precedence nor associativity, since it
    is parsed as an usual application. Abbreviations are used as
@@ -1960,15 +1974,15 @@ Abbreviations
 
    .. rocqtop:: in
 
-      Notation id := (explicit_id _).
+      Abbreviation id := (explicit_id _).
 
    .. rocqtop:: all
 
       Check (id 0).
 
-   Abbreviations disappear when a section is closed. No typing of the
-   denoted expression is performed at definition time. Type checking is
-   done only at the time of use of the abbreviation.
+   No typing of the denoted expression is performed at definition
+   time. Type checking is done only at the time of use of the
+   abbreviation.
 
    Like for notations, if the right-hand side of an abbreviation is a
    partially applied constant, the abbreviation inherits the implicit
@@ -1982,9 +1996,9 @@ Abbreviations
    .. rocqtop:: in reset
 
       Definition force2 q (P:nat*nat -> Prop) :=
-        (forall n', n' >= fst q -> forall p', p' >= snd q -> P q).
+        (forall n', n' >= fst q -> forall p', p' >= snd q -> P (n', p')).
 
-      Notation F p P := (force2 p (fun p => P)).
+      Abbreviation F p P := (force2 p (fun p => P)).
       Check exists x y, F (x,y) (x >= 1 /\ y >= 2).
 
 .. extracted from Gallina chapter
@@ -2032,34 +2046,28 @@ Number notations
          parsing and printing functions, respectively.  The parsing function
          :n:`@qualid__parse` should have one of the following types:
 
-            * :n:`Number.int -> @qualid__type`
-            * :n:`Number.int -> option @qualid__type`
-            * :n:`Number.uint -> @qualid__type`
-            * :n:`Number.uint -> option @qualid__type`
-            * :n:`Z -> @qualid__type`
-            * :n:`Z -> option @qualid__type`
-            * :n:`PrimInt63.pos_neg_int63 -> @qualid__type`
-            * :n:`PrimInt63.pos_neg_int63 -> option @qualid__type`
-            * :n:`PrimFloat.float -> @qualid__type`
-            * :n:`PrimFloat.float -> option @qualid__type`
-            * :n:`Number.number -> @qualid__type`
-            * :n:`Number.number -> option @qualid__type`
+            * :n:`Number.int -> @qualid__type'`
+            * :n:`Number.uint -> @qualid__type'`
+            * :n:`Z -> @qualid__type'`
+            * :n:`PrimInt63.pos_neg_int63 -> @qualid__type'`
+            * :n:`PrimFloat.float -> @qualid__type'`
+            * :n:`Number.number -> @qualid__type'`
+
+         where :n:`@qualid__type'` is one of
+
+            * :n:`@qualid__type`
+            * :n:`option @qualid__type`
+            * :n:`result @qualid__type _`
 
          And the printing function :n:`@qualid__print` should have one of the
          following types:
 
-            * :n:`@qualid__type -> Number.int`
-            * :n:`@qualid__type -> option Number.int`
-            * :n:`@qualid__type -> Number.uint`
-            * :n:`@qualid__type -> option Number.uint`
-            * :n:`@qualid__type -> Z`
-            * :n:`@qualid__type -> option Z`
-            * :n:`@qualid__type -> PrimInt63.pos_neg_int63`
-            * :n:`@qualid__type -> option PrimInt63.pos_neg_int63`
-            * :n:`@qualid__type -> PrimFloat.float`
-            * :n:`@qualid__type -> option PrimFloat.float`
-            * :n:`@qualid__type -> Number.number`
-            * :n:`@qualid__type -> option Number.number`
+            * :n:`@qualid__type' -> Number.int`
+            * :n:`@qualid__type' -> Number.uint`
+            * :n:`@qualid__type' -> Z`
+            * :n:`@qualid__type' -> PrimInt63.pos_neg_int63`
+            * :n:`@qualid__type' -> PrimFloat.float`
+            * :n:`@qualid__type' -> Number.number`
 
          When parsing, the application of the parsing function
          :n:`@qualid__parse` to the number will be fully reduced, and universes
@@ -2168,10 +2176,13 @@ Number notations
    .. exn:: Cannot interpret this number as a value of type @type
 
      The number notation registered for :token:`type` does not support
-     the given number.  This error is given when the interpretation
-     function returns :g:`None`, or if the interpretation is registered
-     only for integers or non-negative integers, and the given number
-     has a fractional or exponent part or is negative.
+     the given number. This error is given when the interpretation
+     function returns :g:`None` (when :n:`@qualid__type'` is :n:`option
+     @qualid__type`) or :g:`Error e` (when :n:`@qualid__type'` is
+     :n:`result @qualid__type _`, in which case `e` will be printed and
+     appended to the error message), or if the interpretation is
+     registered only for integers or non-negative integers, and the
+     given number has a fractional or exponent part or is negative.
 
    .. exn:: overflow in int63 literal @bigint
 
@@ -2225,22 +2236,22 @@ String notations
          parsing and printing functions, respectively.  The parsing function
          :n:`@qualid__parse` should have one of the following types:
 
-            * :n:`Byte.byte -> @qualid__type`
-            * :n:`Byte.byte -> option @qualid__type`
+            * :n:`Byte.byte -> @qualid__type'`
             * :n:`list Byte.byte -> @qualid__type`
-            * :n:`list Byte.byte -> option @qualid__type`
             * :n:`PrimString.string -> @qualid__type`
-            * :n:`PrimString.string -> option @qualid__type`
+
+         where :n:`@qualid__type'` is one of
+
+            * :n:`@qualid__type`
+            * :n:`option @qualid__type`
+            * :n:`result @qualid__type _`
 
          The printing function :n:`@qualid__print` should have one of the
          following types:
 
-            * :n:`@qualid__type -> Byte.byte`
-            * :n:`@qualid__type -> option Byte.byte`
+            * :n:`@qualid__type' -> Byte.byte`
             * :n:`@qualid__type -> list Byte.byte`
-            * :n:`@qualid__type -> option (list Byte.byte)`
             * :n:`@qualid__type -> PrimString.string`
-            * :n:`@qualid__type -> option PrimString.string`
 
          When parsing, the application of the parsing function
          :n:`@qualid__parse` to the string will be fully reduced, and universes
@@ -2258,7 +2269,7 @@ String notations
 
      The string notation registered for :token:`type` does not support
      the given string.  This error is given when the interpretation
-     function returns :g:`None`.
+     function returns :g:`None` or :g:`Error e`.
 
    .. exn:: @qualid__parse should go from Byte.byte, (list Byte.byte), or PrimString.string to @type or (option @type).
 
@@ -2341,7 +2352,7 @@ The following errors apply to both string and number notations:
      Identifiers passed to :cmd:`String Notation` or :cmd:`Number Notation` must be global
      references, or notations which evaluate to single qualified identifiers.
 
-     .. todo note on "single qualified identifiers" https://github.com/coq/coq/pull/11718#discussion_r415076703
+     .. todo note on "single qualified identifiers" https://github.com/rocq-prover/rocq/pull/11718#discussion_r415076703
 
 .. example:: Number Notation for radix 3
 
@@ -2464,7 +2475,7 @@ The following errors apply to both string and number notations:
 
    .. rocqtop:: in
 
-      Notation nSet := Set (only parsing).
+      Abbreviation nSet := Set (only parsing).
       Number Notation nSet of_uint to_uint (via I
         mapping [Empty_set => Iempty, unit => Iunit, sum => Isum]) : type_scope.
 
@@ -2546,7 +2557,7 @@ The following errors apply to both string and number notations:
 
    .. rocqtop:: in reset
 
-      Notation string := (list Byte.byte) (only parsing).
+      Abbreviation string := (list Byte.byte) (only parsing).
       Definition id_string := @id string.
 
       String Notation string id_string id_string : list_scope.
@@ -2627,7 +2638,7 @@ Tactic notations allow customizing the syntax of tactics.
         (from reading .v files).
         Looks like any string passed to "make0" in the code is valid.  But do
         we want to support all these?
-        @JasonGross's opinion here: https://github.com/coq/coq/pull/11718#discussion_r415387421
+        @JasonGross's opinion here: https://github.com/rocq-prover/rocq/pull/11718#discussion_r415387421
 
    .. list-table::
       :header-rows: 1

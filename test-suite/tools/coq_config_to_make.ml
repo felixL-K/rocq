@@ -17,14 +17,16 @@ let write_makefile coqprefix coqlibinstall best_compiler ocamlfind caml_flags co
   pr "##################################################################\n\n";
 
   pr "# Paths where Coq is installed\n";
-  pr "COQPREFIX=%s\n" coqprefix;
-  pr "COQLIBINSTALL=%s\n\n" coqlibinstall;
+  pr "COQPREFIX='%s'\n" coqprefix;
+  pr "COQLIBINSTALL='%s'\n\n" coqlibinstall;
   pr "# The best compiler: native (=opt) or bytecode (=byte)\n";
   pr "BEST=%s\n\n" best_compiler;
   pr "# Findlib command\n";
   pr "OCAMLFIND=%S\n" ocamlfind;
   pr "# Caml flags\n";
   pr "CAMLFLAGS=%s %s\n" caml_flags coq_caml_flags;
+  pr "# coqc was said to be '%s'\n" Sys.argv.(1);
+  pr "ARCH=%s\n" Coq_config.arch;
   ()
 
 let coq_warn_error (prefs : Prefs.t) =
@@ -50,8 +52,8 @@ let find_in_PATH f =
   | Some paths ->
     let sep = if Coq_config.arch_is_win32 then ';' else ':' in
     let paths = String.split_on_char sep paths in
-    paths |> List.find_opt (fun path ->
-        Sys.file_exists (if path = "" then f else Filename.concat path f))
+    paths |> List.map (fun path -> if path = "" then f else Filename.concat path f)
+    |> List.find_opt Sys.file_exists
 
 let main () =
   if Array.length Sys.argv < 2 then die "usage: %s ROCQ_EXE [OUT_FILE]" Sys.argv.(0);

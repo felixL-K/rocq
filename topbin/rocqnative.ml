@@ -109,11 +109,11 @@ type library_t = {
   library_vm : Vmlibrary.on_disk;
 }
 
-let libraries_table : string DPmap.t ref = ref DPmap.empty
+let libraries_table : string DirPath.Map.t ref = ref DirPath.Map.empty
 
 let register_loaded_library senv libname file =
-  let () = assert (not @@ DPmap.mem libname !libraries_table) in
-  let () = libraries_table := DPmap.add libname file !libraries_table in
+  let () = assert (not @@ DirPath.Map.mem libname !libraries_table) in
+  let () = libraries_table := DirPath.Map.add libname file !libraries_table in
   let prefix = Nativecode.mod_uid_of_dirpath libname ^ "." in
   let () = Nativecode.register_native_file prefix in
   senv
@@ -143,7 +143,7 @@ let intern_from_file f =
 
 let rec intern_library (needed, contents) dir =
   (* Look if already listed and consequently its dependencies too *)
-  match DPmap.find dir contents with
+  match DirPath.Map.find dir contents with
   | lib -> lib.library_digests, (needed, contents)
   | exception Not_found ->
   let f = Loadpath.locate_absolute_library dir in
@@ -154,7 +154,7 @@ let rec intern_library (needed, contents) dir =
        DirPath.print m.library_name ++ spc () ++ str "and not library" ++
        spc() ++ DirPath.print dir ++ str ".");
   let (needed, contents) = intern_library_deps (needed, contents) dir m f in
-  m.library_digests, (dir :: needed, DPmap.add dir m contents)
+  m.library_digests, (dir :: needed, DirPath.Map.add dir m contents)
 
 and intern_library_deps libs dir m from =
   Array.fold_left (intern_mandatory_library dir from) libs m.library_deps
@@ -184,7 +184,7 @@ let save_library_to env dir f lib =
 
 let get_used_load_paths () =
   String.Set.elements
-    (DPmap.fold (fun m f acc -> String.Set.add
+    (DirPath.Map.fold (fun m f acc -> String.Set.add
       (Filename.dirname f) acc)
        !libraries_table String.Set.empty)
 
@@ -227,14 +227,14 @@ let add_rec_path ~unix_path ~rocq_root =
     Feedback.msg_warning (str "Cannot open " ++ str unix_path)
 
 let init_load_path_std env ~default_ml () =
-  let stdlib = Boot.Env.stdlib env |> Boot.Path.to_string in
+  let corelib = Boot.Env.corelib env |> Boot.Path.to_string in
   let user_contrib = Boot.Env.user_contrib env |> Boot.Path.to_string in
   let xdg_dirs = Envars.xdg_dirs in
   let rocqpath = Envars.coqpath in
   let () = if default_ml then Nativelib.(include_dirs := default_include_dirs env) in
   (* NOTE: These directories are searched from last to first *)
   (* first standard library *)
-  add_rec_path ~unix_path:stdlib ~rocq_root:(Names.DirPath.make[rocq_root]);
+  add_rec_path ~unix_path:corelib ~rocq_root:(Names.DirPath.make[rocq_root]);
   (* then user-contrib *)
   if Sys.file_exists user_contrib then
     add_rec_path ~unix_path:user_contrib ~rocq_root:Loadpath.default_root_prefix;
@@ -281,13 +281,20 @@ let compile senv ~in_file =
   let lib = Library.intern_from_file in_file in
   let dir = lib.Library.library_name in
   (* Require the dependencies **only once** *)
-  let deps, contents = Library.intern_library_deps ([], DPmap.empty) dir lib in_file in
-  let fold senv dep = Library.register_library senv (DPmap.find dep contents) in
+  let deps, contents = Library.intern_library_deps ([], DirPath.Map.empty) dir lib in_file in
+  let fold senv dep = Library.register_library senv (DirPath.Map.find dep contents) in
   let senv = List.fold_left fold senv (List.rev deps) in
   (* Extract the native code and compile it *)
   let modl = Mod_declarations.mod_type (Safe_typing.module_of_library lib.Library.library_data) in
   let out_vo = Filename.(remove_extension in_file) ^ ".vo" in
-  Library.save_library_to (Safe_typing.env_of_safe_env senv) dir out_vo modl
+  (* Replay locally the module being extracted *)
+  let env = match modl with
+  | NoFunctor struc ->
+    let reso = Mod_declarations.mod_delta (Safe_typing.module_of_library lib.Library.library_data) in
+    Modops.add_structure (MPfile dir) struc reso (Safe_typing.env_of_safe_env senv)
+  | MoreFunctor _ -> assert false
+  in
+  Library.save_library_to env dir out_vo modl
 
 module Usage :
 sig

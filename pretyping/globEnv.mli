@@ -59,11 +59,15 @@ val push_rec_types : hypnaming:naming_mode -> evar_map -> Name.t EConstr.binder_
 
 (** Declare an evar using renaming information *)
 
-val new_evar : t -> evar_map -> ?src:Evar_kinds.t Loc.located ->
+val new_evar : t -> evar_map -> ?src:Evar_kinds.t Loc.located -> ?rrpat:bool ->
   ?naming:Namegen.intro_pattern_naming_expr -> ?relevance:ERelevance.t ->
   constr -> evar_map * constr
 
 val new_type_evar : t -> evar_map -> src:Evar_kinds.t Loc.located -> evar_map * constr
+
+(** Lookup the ident in the context that would be used for an evar in
+    this environment, producing a term (Var or Rel) valid in [renamed_env]. *)
+val lookup_renamed : t -> Id.t -> constr
 
 (** [hide_variable env id] tells to hide the binding of [id] in
     the ltac environment part of [env]. It is useful e.g.

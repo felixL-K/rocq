@@ -19,9 +19,22 @@ type filename = string
 type dirpath = string list
 type root = filename * dirpath
 
+module Filename :
+sig
+  type t
+  val repr : t -> filename
+end
+
+module FileSet : Set.S with type elt = Filename.t
+
+type fileset = private {
+  point : filename;
+  files : FileSet.t; (* guaranteed to contain [point] *)
+}
+
 type result =
-  | ExactMatches of filename list
-  | PartialMatchesInSameRoot of root * filename list
+  | ExactMatches of fileset
+  | PartialMatchesInSameRoot of root * fileset
 
 module State : sig
   type t
@@ -35,6 +48,7 @@ val search_v_known : State.t -> ?from:dirpath -> dirpath -> result option
 val search_other_known : State.t -> ?from:dirpath -> dirpath -> result option
 
 val is_in_coqlib : State.t -> ?from:dirpath -> dirpath -> bool
+val is_other_in_coqlib : State.t -> from:dirpath -> dirpath -> bool
 
 val add_current_dir : State.t -> System.unix_path -> unit
 val add_q_include : State.t -> System.unix_path -> string -> unit

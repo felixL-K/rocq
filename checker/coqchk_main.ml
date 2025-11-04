@@ -108,7 +108,7 @@ let init_load_path rocqenv =
   (* the to_string casting won't be necessary once Boot handles
      include paths *)
   let plugins = Boot.Env.plugins rocqenv |> Boot.Path.to_string in
-  let theories = Boot.Env.stdlib rocqenv |> Boot.Path.to_string in
+  let theories = Boot.Env.corelib rocqenv |> Boot.Path.to_string in
   let user_contrib = Boot.Env.user_contrib rocqenv |> Boot.Path.to_string in
   let xdg_dirs = Envars.xdg_dirs in
   let rocqpath = Envars.coqpath in
@@ -275,6 +275,7 @@ let explain_exn = function
       | NumberBranches _ -> str"NumberBranches"
       | IllFormedBranch _ -> str"IllFormedBranch"
       | IllFormedCaseParams -> str "IllFormedCaseParams"
+      | BadProjType _ -> str "BadProjType"
       | Generalization _ -> str"Generalization"
       | ActualType _ -> str"ActualType"
       | IncorrectPrimitive _ -> str"IncorrectPrimitive"
@@ -299,8 +300,9 @@ let explain_exn = function
       | CantApplyNonFunctional _ -> str"CantApplyNonFunctional"
       | IllFormedRecBody _ -> str"IllFormedRecBody"
       | IllTypedRecBody _ -> str"IllTypedRecBody"
-      | UnsatisfiedQConstraints _ -> str"UnsatisfiedQConstraints"
+      | UnsatisfiedElimConstraints _ -> str"UnsatisfiedElimConstraints"
       | UnsatisfiedConstraints _ -> str"UnsatisfiedConstraints"
+      | UnsatisfiedQCumulConstraints _ -> str"UnsatisfiedQCumulConstraints"
       | DisallowedSProp -> str"DisallowedSProp"
       | BadBinderRelevance _ -> str"BadBinderRelevance"
       | BadCaseRelevance _ -> str"BadCaseRelevance"
@@ -309,6 +311,8 @@ let explain_exn = function
       | UndeclaredUniverses _ -> str"UndeclaredUniverse"
       | BadVariance _ -> str "BadVariance"
       | UndeclaredUsedVariables _ -> str "UndeclaredUsedVariables"
+      | IllFormedConstant _ -> str "IllFormedConstant"
+      | IllFormedInductive _ -> str "IllFormedInductive"
       ))
 
   | InductiveError (env,e) ->

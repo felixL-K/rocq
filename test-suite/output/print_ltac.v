@@ -1,5 +1,5 @@
 (* Testing of various things about Print Ltac *)
-(* https://github.com/coq/coq/issues/10971 *)
+(* https://github.com/rocq-prover/rocq/issues/10971 *)
 Ltac t1 := time "my tactic" idtac.
 Print Ltac t1.
 Ltac t2 := let x := string:("my tactic") in idtac x.
@@ -7,13 +7,13 @@ Print Ltac t2.
 Tactic Notation "idtacstr" string(str) := idtac str.
 Ltac t3 := idtacstr "my tactic".
 Print Ltac t3.
-(* https://github.com/coq/coq/issues/9716 *)
+(* https://github.com/rocq-prover/rocq/issues/9716 *)
 Ltac t4 x := match x with ?A => constr:((A, A)) end.
 Print Ltac t4.
 
-Notation idnat := (@id nat).
-Notation idn := id.
-Notation idan := (@id).
+Abbreviation idnat := (@id nat).
+Abbreviation idn := id.
+Abbreviation idan := (@id).
 Fail Strategy transparent [idnat].
 Strategy transparent [idn].
 Strategy transparent [idan].
@@ -46,9 +46,9 @@ Module Type Empty. End Empty.
 Module E. End E.
 Module F (E : Empty).
   Definition id {T} := @id T.
-  Notation idnat := (@id nat).
-  Notation idn := id.
-  Notation idan := (@id).
+  Abbreviation idnat := (@id nat).
+  Abbreviation idn := id.
+  Abbreviation idan := (@id).
   Fail Strategy transparent [idnat].
   Strategy transparent [idn].
   Strategy transparent [idan].

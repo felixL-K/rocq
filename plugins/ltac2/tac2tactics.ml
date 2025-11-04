@@ -26,8 +26,7 @@ let tactic_infer_flags with_evar = Pretyping.{
   expand_evars = true;
   program_mode = false;
   polymorphic = false;
-  undeclared_evars_patvars = false;
-  patvars_abstract = false;
+  undeclared_evars_rr = false;
   unconstrained_sorts = false;
 }
 
@@ -190,6 +189,32 @@ let setoid_rewrite orient c occs id =
   let occs = mk_occurrences occs in
   Rewrite.cl_rewrite_clause (delayed_of_tactic c) orient occs id
 
+let rewrite_strat strat clause =
+  Rewrite.cl_rewrite_clause_strat strat clause
+
+module RewriteStrats =
+struct
+  let fix f =
+    let f s = Proofview.Monad.map Tac2ffi.to_rewstrategy (Tac2val.apply f [Tac2ffi.of_rewstrategy s]) in
+    Rewrite.Strategies.fix_tac f
+
+  let hints i =
+    Rewrite.Strategies.hints (Id.to_string i)
+
+  let old_hints i =
+    Rewrite.Strategies.old_hints (Id.to_string i)
+
+  let one_lemma c l2r =
+    let c env sigma = Pretyping.understand_uconstr env sigma c in
+    Rewrite.Strategies.one_lemma c l2r None AllOccurrences
+
+  let lemmas cs =
+    let mk_c c = (); fun env sigma -> Pretyping.understand_uconstr env sigma c in
+    let mk_c c = (mk_c c, true, None) in
+    let cs = List.map mk_c cs in
+    Rewrite.Strategies.lemmas cs
+end
+
 let symmetry cl =
   let cl = mk_clause cl in
   Tactics.intros_symmetry cl
@@ -226,116 +251,65 @@ let get_evaluable_reference = function
 | GlobRef.ConstRef cst -> Proofview.tclUNIT (Evaluable.EvalConstRef cst)
 | r -> Proofview.tclZERO (Tacred.NotEvaluableRef r)
 
-let reduce r cl =
-  let cl = mk_clause cl in
-  Tactics.reduce r cl
+let mk_flags flags =
+  Proofview.Monad.map
+    (fun rConst -> { flags with rConst })
+    (Proofview.Monad.List.map get_evaluable_reference flags.rConst)
 
-let simpl flags where cl =
-  let where = Option.map map_pattern_with_occs where in
+let reduce_in red cl =
   let cl = mk_clause cl in
-  Proofview.Monad.List.map get_evaluable_reference flags.rConst >>= fun rConst ->
-  let flags = { flags with rConst } in
-  Tactics.reduce (Simpl (flags, where)) cl
+  Tactics.reduce red cl
 
-let cbv flags cl =
-  let cl = mk_clause cl in
-  Proofview.Monad.List.map get_evaluable_reference flags.rConst >>= fun rConst ->
-  let flags = { flags with rConst } in
-  Tactics.reduce (Cbv flags) cl
-
-let cbn flags cl =
-  let cl = mk_clause cl in
-  Proofview.Monad.List.map get_evaluable_reference flags.rConst >>= fun rConst ->
-  let flags = { flags with rConst } in
-  Tactics.reduce (Cbn flags) cl
-
-let lazy_ flags cl =
-  let cl = mk_clause cl in
-  Proofview.Monad.List.map get_evaluable_reference flags.rConst >>= fun rConst ->
-  let flags = { flags with rConst } in
-  Tactics.reduce (Lazy flags) cl
-
-let unfold occs cl =
-  let cl = mk_clause cl in
-  let map (gr, occ) =
-    let occ = mk_occurrences occ in
-    get_evaluable_reference gr >>= fun gr -> Proofview.tclUNIT (occ, gr)
-  in
-  Proofview.Monad.List.map map occs >>= fun occs ->
-  Tactics.reduce (Unfold occs) cl
-
-let pattern where cl =
-  let where = List.map (fun (c, occ) -> (mk_occurrences occ, c)) where in
-  let cl = mk_clause cl in
-  Tactics.reduce (Pattern where) cl
-
-let vm where cl =
-  let where = Option.map map_pattern_with_occs where in
-  let cl = mk_clause cl in
-  Tactics.reduce (CbvVm where) cl
-
-let native where cl =
-  let where = Option.map map_pattern_with_occs where in
-  let cl = mk_clause cl in
-  Tactics.reduce (CbvNative where) cl
-
-let eval_fun red c =
+let reduce_constr red c =
   Tac2core.pf_apply begin fun env sigma ->
-  let (redfun, _) = Redexpr.reduction_of_red_expr env red in
-  let (sigma, ans) = redfun env sigma c in
-  Proofview.Unsafe.tclEVARS sigma >>= fun () ->
-  Proofview.tclUNIT ans
+    let (redfun, _) = Redexpr.reduction_of_red_expr env red in
+    let (sigma, ans) = redfun env sigma c in
+    Proofview.Unsafe.tclEVARS sigma >>= fun () ->
+    Proofview.tclUNIT ans
   end
 
-let eval_red c =
-  eval_fun Red c
+let simpl flags where =
+  Proofview.Monad.map
+    (fun flags ->
+       let where = Option.map map_pattern_with_occs where in
+       (Simpl (flags, where)))
+    (mk_flags flags)
 
-let eval_hnf c =
-  eval_fun Hnf c
+let cbv flags =
+  Proofview.Monad.map
+    (fun flags -> Cbv flags)
+    (mk_flags flags)
 
-let eval_simpl flags where c =
-  let where = Option.map map_pattern_with_occs where in
-  Proofview.Monad.List.map get_evaluable_reference flags.rConst >>= fun rConst ->
-  let flags = { flags with rConst } in
-  eval_fun (Simpl (flags, where)) c
+let cbn flags  =
+  Proofview.Monad.map
+    (fun flags -> Cbn flags)
+    (mk_flags flags)
 
-let eval_cbv flags c =
-  Proofview.Monad.List.map get_evaluable_reference flags.rConst >>= fun rConst ->
-  let flags = { flags with rConst } in
-  eval_fun (Cbv flags) c
+let lazy_ flags =
+  Proofview.Monad.map
+    (fun flags -> Lazy flags)
+    (mk_flags flags)
 
-let eval_cbn flags c =
-  Proofview.Monad.List.map get_evaluable_reference flags.rConst >>= fun rConst ->
-  let flags = { flags with rConst } in
-  eval_fun (Cbn flags) c
-
-let eval_lazy flags c =
-  Proofview.Monad.List.map get_evaluable_reference flags.rConst >>= fun rConst ->
-  let flags = { flags with rConst } in
-  eval_fun (Lazy flags) c
-
-let eval_unfold occs c =
+let unfold occs =
   let map (gr, occ) =
     let occ = mk_occurrences occ in
     get_evaluable_reference gr >>= fun gr -> Proofview.tclUNIT (occ, gr)
   in
-  Proofview.Monad.List.map map occs >>= fun occs ->
-  eval_fun (Unfold occs) c
+  Proofview.Monad.map
+    (fun occs -> Unfold occs)
+    (Proofview.Monad.List.map map occs)
 
-let eval_fold cl c =
-  eval_fun (Fold cl) c
+let pattern where =
+  let where = List.map (fun (c, occ) -> (mk_occurrences occ, c)) where in
+  Pattern where
 
-let eval_pattern where c =
-  let where = List.map (fun (pat, occ) -> (mk_occurrences occ, pat)) where in
-  eval_fun (Pattern where) c
-
-let eval_vm where c =
+let vm where =
   let where = Option.map map_pattern_with_occs where in
-  eval_fun (CbvVm where) c
+  CbvVm where
 
-let eval_native where c =
+let native where =
   let where = Option.map map_pattern_with_occs where in
-  eval_fun (CbvNative where) c
+  CbvNative where
 
 let on_destruction_arg tac ev arg =
   Proofview.Goal.enter begin fun gl ->

@@ -65,7 +65,7 @@ let to_red_strength = function
   | ValInt 1 -> Head
   | _ -> assert false
 
-let to_red_flag v = match Value.to_tuple v with
+let to_red_flag v : Tac2types.red_flag = match Value.to_tuple v with
 | [| strength; beta; iota; fix; cofix; zeta; delta; const |] ->
   {
     rStrength = to_red_strength strength;
@@ -81,11 +81,13 @@ let to_red_flag v = match Value.to_tuple v with
 
 let red_flags = make_to_repr to_red_flag
 
-let pattern_with_occs = pair pattern occurrences
-
 let constr_with_occs = pair constr occurrences
 
 let reference_with_occs = pair reference occurrences
+
+let to_red_context = to_option (to_pair to_pattern to_occurrences)
+
+let red_context = make_to_repr to_red_context
 
 let rec to_intro_pattern v = match Value.to_block v with
 | (0, [| b |]) -> IntroForthcoming (Value.to_bool b)
@@ -331,95 +333,73 @@ let () =
 let () = define "tac_exfalso" (unit @-> tac unit) @@ fun () ->
   Tactics.exfalso
 
-let () =
-  define "tac_red" (clause @-> tac unit) (Tac2tactics.reduce Red)
+(** Reductions *)
 
 let () =
-  define "tac_hnf" (clause @-> tac unit) (Tac2tactics.reduce Hnf)
+  define "reduce_in"
+    (reduction @-> clause @-> tac unit)
+    Tac2tactics.reduce_in
 
 let () =
-  define "tac_simpl"
-    (red_flags @-> option pattern_with_occs @-> clause @-> tac unit)
+  define "reduce_constr"
+    (reduction @-> constr @-> tac constr)
+    Tac2tactics.reduce_constr
+
+let () = define "red"
+    (ret reduction)
+    Red
+
+let () = define "hnf"
+    (ret reduction)
+    Hnf
+
+let () =
+  define "simpl"
+    (red_flags @-> red_context @-> tac reduction)
     Tac2tactics.simpl
 
 let () =
-  define "tac_cbv" (red_flags @-> clause @-> tac unit) Tac2tactics.cbv
+  define "cbv"
+    (red_flags @-> tac reduction)
+    Tac2tactics.cbv
 
 let () =
-  define "tac_cbn" (red_flags @-> clause @-> tac unit) Tac2tactics.cbn
+  define "cbn"
+    (red_flags @-> tac reduction)
+    Tac2tactics.cbn
 
 let () =
-  define "tac_lazy" (red_flags @-> clause @-> tac unit) Tac2tactics.lazy_
+  define "lazy"
+    (red_flags @-> tac reduction)
+    Tac2tactics.lazy_
 
 let () =
-  define "tac_unfold"
-    (list reference_with_occs @-> clause @-> tac unit)
+  define "unfold"
+    (list reference_with_occs @-> tac reduction)
     Tac2tactics.unfold
 
 let () =
-  define "tac_fold"
-    (list constr @-> clause @-> tac unit)
-    (fun args cl -> Tac2tactics.reduce (Fold args) cl)
+  define "fold"
+    (list constr @-> ret reduction)
+    (fun cs -> Fold cs)
 
 let () =
-  define "tac_pattern"
-    (list constr_with_occs @-> clause @-> tac unit)
+  define "pattern"
+    (list constr_with_occs @-> ret reduction)
     Tac2tactics.pattern
 
 let () =
-  define "tac_vm"
-    (option pattern_with_occs @-> clause @-> tac unit)
+  define "vm"
+    (red_context @-> ret reduction)
     Tac2tactics.vm
 
 let () =
-  define "tac_native"
-    (option pattern_with_occs @-> clause @-> tac unit)
+  define "native"
+    (red_context @-> ret reduction)
     Tac2tactics.native
 
-(** Reduction functions *)
 
-let () = define "eval_red" (constr @-> tac constr) Tac2tactics.eval_red
-
-let () = define "eval_hnf" (constr @-> tac constr) Tac2tactics.eval_hnf
-
-let () =
-  define "eval_simpl"
-    (red_flags @-> option pattern_with_occs @-> constr @-> tac constr)
-    Tac2tactics.eval_simpl
-
-let () =
-  define "eval_cbv" (red_flags @-> constr @-> tac constr) Tac2tactics.eval_cbv
-
-let () =
-  define "eval_cbn" (red_flags @-> constr @-> tac constr) Tac2tactics.eval_cbn
-
-let () =
-  define "eval_lazy" (red_flags @-> constr @-> tac constr) Tac2tactics.eval_lazy
-
-let () =
-  define "eval_unfold"
-    (list reference_with_occs @-> constr @-> tac constr)
-    Tac2tactics.eval_unfold
-
-let () =
-  define "eval_fold"
-    (list constr @-> constr @-> tac constr)
-    Tac2tactics.eval_fold
-
-let () =
-  define "eval_pattern"
-    (list constr_with_occs @-> constr @-> tac constr)
-    Tac2tactics.eval_pattern
-
-let () =
-  define "eval_vm"
-    (option pattern_with_occs @-> constr @-> tac constr)
-    Tac2tactics.eval_vm
-
-let () =
-  define "eval_native"
-    (option pattern_with_occs @-> constr @-> tac constr)
-    Tac2tactics.eval_native
+(** Rewritings *)
 
 let () =
   define "tac_change"
@@ -435,6 +415,132 @@ let () =
   define "tac_setoid_rewrite"
     (bool @-> uthaw constr_with_bindings @--> occurrences @-> option ident @-> tac unit)
     Tac2tactics.setoid_rewrite
+
+let () =
+  define "tac_rewrite_strat"
+    (rewstrategy @-> option ident @-> tac unit)
+    Tac2tactics.rewrite_strat
+
+let () =
+  define "rewstrat_id"
+    (ret rewstrategy)
+    Rewrite.Strategies.id
+
+let () =
+  define "rewstrat_fail"
+    (ret rewstrategy)
+    Rewrite.Strategies.fail
+
+let () =
+  define "rewstrat_refl"
+    (ret rewstrategy)
+    Rewrite.Strategies.refl
+
+let () =
+  define "rewstrat_progress"
+    (rewstrategy @-> ret rewstrategy)
+    Rewrite.Strategies.progress
+
+let () =
+  define "rewstrat_seq"
+    (rewstrategy @-> rewstrategy @-> ret rewstrategy)
+    Rewrite.Strategies.seq
+
+let () =
+  define "rewstrat_seqs"
+    (list rewstrategy @-> ret rewstrategy)
+    Rewrite.Strategies.seqs
+
+let () =
+  define "rewstrat_choice"
+    (rewstrategy @-> rewstrategy @-> ret rewstrategy)
+    Rewrite.Strategies.choice
+
+let () =
+  define "rewstrat_choices"
+    (list rewstrategy @-> ret rewstrategy)
+    Rewrite.Strategies.choices
+
+let () =
+  define "rewstrat_try"
+    (rewstrategy @-> ret rewstrategy)
+    Rewrite.Strategies.try_
+
+let () =
+  define "rewstrat_fix"
+    (closure @-> tac rewstrategy)
+    Tac2tactics.RewriteStrats.fix
+
+let () =
+  define "rewstrat_any"
+    (rewstrategy @-> ret rewstrategy)
+    Rewrite.Strategies.any
+
+let () =
+  define "rewstrat_repeat"
+    (rewstrategy @-> ret rewstrategy)
+    Rewrite.Strategies.repeat
+
+let () =
+  define "rewstrat_one_subterm"
+    (rewstrategy @-> ret rewstrategy)
+    Rewrite.Strategies.one_subterm
+
+let () =
+  define "rewstrat_all_subterms"
+    (rewstrategy @-> ret rewstrategy)
+    Rewrite.Strategies.all_subterms
+
+let () =
+  define "rewstrat_bottomup"
+    (rewstrategy @-> ret rewstrategy)
+    Rewrite.Strategies.bottomup
+
+let () =
+  define "rewstrat_topdown"
+    (rewstrategy @-> ret rewstrategy)
+    Rewrite.Strategies.topdown
+
+let () =
+  define "rewstrat_innermost"
+    (rewstrategy @-> ret rewstrategy)
+    Rewrite.Strategies.innermost
+
+let () =
+  define "rewstrat_outermost"
+    (rewstrategy @-> ret rewstrategy)
+    Rewrite.Strategies.outermost
+
+let () =
+  define "rewstrat_hints"
+    (ident @-> ret rewstrategy)
+    Tac2tactics.RewriteStrats.hints
+
+let () =
+  define "rewstrat_old_hints"
+    (ident @-> ret rewstrategy)
+    Tac2tactics.RewriteStrats.old_hints
+
+let () =
+  define "rewstrat_one_lemma"
+    (preterm @-> bool @-> ret rewstrategy)
+    Tac2tactics.RewriteStrats.one_lemma
+
+let () =
+  define "rewstrat_lemmas"
+    (list preterm @-> ret rewstrategy)
+    Tac2tactics.RewriteStrats.lemmas
+
+let () =
+  define "rewstrat_fold"
+    (constr @-> ret rewstrategy)
+    Rewrite.Strategies.fold
+
+let () =
+  define "rewstrat_eval"
+    (reduction @-> ret rewstrategy)
+    Rewrite.Strategies.reduce
+
 
 let () =
   define "tac_inversion"
@@ -527,10 +633,10 @@ let () =
   define "tac_admit" (unit @-> tac unit) (fun _ -> Proofview.give_up)
 
 let () =
-  define "tac_fix" (ident @-> int @-> tac unit) Tactics.fix
+  define "tac_fix" (ident @-> int @-> tac unit) FixTactics.fix
 
 let () =
-  define "tac_cofix" (ident @-> tac unit) Tactics.cofix
+  define "tac_cofix" (ident @-> tac unit) FixTactics.cofix
 
 let () =
   define "tac_clear" (list ident @-> tac unit) Tactics.clear
@@ -616,6 +722,18 @@ let () =
   define "empty_transparent_state" (ret transparent_state) TransparentState.empty
 
 (** Tactics around Evarconv unification (in [Ltac2/Unification.v]). *)
+
+let to_conv_pb v = match Tac2ffi.to_int v with
+| 0 -> Conversion.CONV
+| 1 -> Conversion.CUMUL
+| _ -> assert false
+
+let () =
+  define "infer_conv" (to_conv_pb @--> transparent_state @-> constr @-> constr @-> tac bool) @@ fun pb ts c1 c2 ->
+  Tac2core.pf_apply @@ fun env sigma ->
+  match Reductionops.infer_conv ~pb ~ts env sigma c1 c2 with
+  | Some sigma -> Proofview.Unsafe.tclEVARS sigma <*> return true
+  | None -> return false
 
 let () =
   define "evarconv_unify"

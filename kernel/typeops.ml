@@ -45,8 +45,8 @@ let check_constraints cst env =
   else error_unsatisfied_constraints env cst
 
 let check_qconstraints qcst env =
-  if Sorts.QConstraints.trivial qcst then ()
-  else error_unsatisfied_qconstraints env qcst
+  if Sorts.QCumulConstraints.trivial qcst then ()
+  else error_unsatisfied_qcumul_constraints env qcst
 
 (* This should be a type (a priori without intention to be an assumption) *)
 let check_type env c t =
@@ -65,8 +65,12 @@ let infer_assumption env t ty =
 
 let nf_relevance env = function
   | Sorts.RelevanceVar q as r ->
-    if Environ.Internal.is_above_prop env q then Sorts.Relevant
-    else r
+     if Environ.Internal.is_above_prop env q ||
+          Inductive.eliminates_to (Environ.qualities env) (Sorts.Quality.QVar q) Sorts.Quality.qprop
+     then Sorts.Relevant
+     else if Inductive.eliminates_to (Environ.qualities env) Sorts.Quality.qsprop (Sorts.Quality.QVar q)
+     then Sorts.Irrelevant
+     else r
   | (Sorts.Irrelevant | Sorts.Relevant) as r -> r
 
 let check_relevance env r r' =
@@ -112,6 +116,14 @@ let instantiate_context env u subst nas ctx =
     LocalDef (nas.(i), ty, bdy) :: ctx
   in
   instantiate (Array.length nas - 1) ctx
+
+let check_constant env cst =
+  let _, _, can = Environ.lookup_constant_key cst env in
+  if not (KerName.equal can (Constant.canonical cst)) then error_ill_formed_constant env cst can
+
+let check_mind env mind =
+  let _, _, can = Environ.lookup_mind_key mind env in
+  if not (KerName.equal can (MutInd.canonical mind)) then error_ill_formed_inductive env mind can
 
 (************************************************)
 (* Incremental typing rules: builds a typing judgment given the *)
@@ -186,8 +198,8 @@ let check_hyps_inclusion env ?evars c sign =
 
 (* Type of constants *)
 
-
 let type_of_constant env (kn,_u as cst) =
+  let () = check_constant env kn in
   let cb = lookup_constant kn env in
   let () = check_hyps_inclusion env (GlobRef.ConstRef kn) cb.const_hyps in
   let ty, cu = constant_type env cst in
@@ -195,6 +207,7 @@ let type_of_constant env (kn,_u as cst) =
     ty
 
 let type_of_constant_in env (kn,_u as cst) =
+  let () = check_constant env kn in
   let cb = lookup_constant kn env in
   let () = check_hyps_inclusion env (GlobRef.ConstRef kn) cb.const_hyps in
   constant_type_in env cst
@@ -412,6 +425,7 @@ let make_param_univs env indu spec args argtys =
     argtys
 
 let type_of_inductive_knowing_parameters env (ind,u as indu) args argst =
+  let () = check_mind env (fst ind) in
   let (mib,_mip) as spec = lookup_mind_specif env ind in
   let () = assert (Option.has_some mib.mind_template) in
   let () = check_hyps_inclusion env (GlobRef.IndRef ind) mib.mind_hyps in
@@ -421,6 +435,7 @@ let type_of_inductive_knowing_parameters env (ind,u as indu) args argst =
   t
 
 let type_of_inductive env (ind,u) =
+  let () = check_mind env (fst ind) in
   let (mib,mip) = lookup_mind_specif env ind in
   check_hyps_inclusion env (GlobRef.IndRef ind) mib.mind_hyps;
   let t,cst = Inductive.constrained_type_of_inductive ((mib,mip),u) in
@@ -431,6 +446,7 @@ let type_of_inductive env (ind,u) =
 
 let type_of_constructor_knowing_parameters env (c, u as cu) args argst =
   let ind = inductive_of_constructor c in
+  let () = check_mind env (fst ind) in
   let (mib, _ as spec) = lookup_mind_specif env ind in
   let () = assert (Option.has_some mib.mind_template) in
   let () = check_hyps_inclusion env (GlobRef.ConstructRef c) mib.mind_hyps in
@@ -440,7 +456,9 @@ let type_of_constructor_knowing_parameters env (c, u as cu) args argst =
   t
 
 let type_of_constructor env (c,_u as cu) =
-  let (mib, _ as specif) = lookup_mind_specif env (inductive_of_constructor c) in
+  let ind = inductive_of_constructor c in
+  let () = check_mind env (fst ind) in
+  let (mib, _ as specif) = lookup_mind_specif env ind in
   let () = check_hyps_inclusion env (GlobRef.ConstructRef c) mib.mind_hyps in
   let t,cst = constrained_type_of_constructor cu specif in
   let () = check_constraints cst env in
@@ -547,7 +565,7 @@ let type_of_case env (mib, mip as specif) ci u pms (pctx, pnas, p, rp, pt) iv c 
     if not (is_inversion = should_invert_case env rp ci)
     then error_bad_invert env
   in
-  let () = if not (is_allowed_elimination (specif,u) sp) then begin
+  let () = if not (is_allowed_elimination env (specif,u) sp) then begin
     let kinds = Some sp in
     error_elim_arity env (ind, u') c kinds
   end
@@ -565,7 +583,10 @@ let type_of_projection env p c ct =
     try find_rectype env ct
     with Not_found -> error_case_not_inductive env (make_judge c ct)
   in
-  assert(Ind.CanOrd.equal (Projection.inductive p) ind);
+  let () =
+    if not (Environ.QInd.equal env (Projection.inductive p) ind) then
+      error_bad_proj_type env (make_judge c ct) p
+  in
   let pr = UVars.subst_instance_relevance u pr in
   let ty = Vars.subst_instance_constr u pty in
   pr, substl (c :: CList.rev args) ty
@@ -737,6 +758,7 @@ and execute_aux tbl env cstr =
             | Result.Error () -> error_bad_invert env (* TODO: more informative message *)
 
         in
+        let () = check_mind env (fst ci.ci_ind) in
         let mib, mip = Inductive.lookup_mind_specif env ci.ci_ind in
         let pmst = execute_array tbl env pms in
         let pms = Array.map self pms in
@@ -859,7 +881,7 @@ let execute env c =
 
 let check_declared_qualities env qualities =
   let module S = Sorts.QVar.Set in
-  let unknown = S.diff qualities (Environ.qualities env) in
+  let unknown = S.diff qualities (Environ.qvars env) in
   if S.is_empty unknown then ()
   else error_undeclared_qualities env unknown
 

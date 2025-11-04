@@ -32,6 +32,8 @@ type econstr
 type etypes = econstr
 type esorts
 type erelevance
+type einstance
+type 'a puniverses = 'a * einstance
 
 (** {5 Existential variables and unification states} *)
 
@@ -193,6 +195,7 @@ val new_pure_evar :
   ?abstract_arguments:Abstraction.t -> ?candidates:econstr list ->
   ?name:Id.t ->
   ?typeclass_candidate:bool ->
+  ?rrpat:bool ->
   named_context_val -> evar_map -> etypes -> evar_map * Evar.t
 (** Low-level interface to create an evar.
   @param src User-facing source for the evar
@@ -359,6 +362,12 @@ val is_obligation_evar : evar_map -> Evar.t -> bool
 val get_impossible_case_evars : evar_map -> Evar.Set.t
 (** Set of undefined evars with ImpossibleCase evar source. *)
 
+val get_rewrite_rule_evars : evar_map -> Evar.Set.t
+(** Set of evars declared as an ununifiable rewrite rule evar *)
+
+val is_rewrite_rule_evar : evar_map -> Evar.t -> bool
+(** Is the evar declared as an ununifiable rewrite rule evar *)
+
 val downcast : Evar.t-> etypes -> evar_map -> evar_map
 (** Change the type of an undefined evar to a new type assumed to be a
     subtype of its current type; subtyping must be ensured by caller *)
@@ -377,15 +386,11 @@ val dependent_evar_ident : Evar.t -> evar_map -> Id.t
 
 (** {5 Side-effects} *)
 
-(* inductive * (scheme_name * sort * mutual *)
+(* inductive * (scheme_name * sort * is_mutual *)
 type side_effect_role =
 | Schema of inductive * (string list * UnivGen.QualityOrSet.t option * bool)
 
-(* Schemes already defined but not yet in the global env *)
-type side_effects = {
-  seff_private : Safe_typing.private_constants;
-  seff_roles : side_effect_role Cmap.t;
-}
+type side_effects
 
 val empty_side_effects : side_effects
 
@@ -397,6 +402,15 @@ val eval_side_effects : evar_map -> side_effects
 
 val drop_side_effects : evar_map -> evar_map
 (** This should not be used. For hacking purposes. *)
+
+val push_side_effects : Safe_typing.private_constants ->
+  ?univs:UState.named_universes_entry -> ?role:side_effect_role -> side_effects -> side_effects
+
+(** {6 Accessors} *)
+
+val seff_private : side_effects -> Safe_typing.private_constants
+val seff_roles : side_effects -> side_effect_role Cmap_env.t
+val seff_univs : side_effects -> UState.named_universes_entry Names.Cmap_env.t
 
 (** {5 Future goals} *)
 
@@ -566,14 +580,14 @@ val make_nonalgebraic_variable : evar_map -> Univ.Level.t -> evar_map
 
 val is_flexible_level : evar_map -> Univ.Level.t -> bool
 
-val normalize_universe_instance : evar_map -> UVars.Instance.t -> UVars.Instance.t
+val normalize_universe_instance : evar_map -> einstance -> einstance
 
 val set_leq_sort : evar_map -> esorts -> esorts -> evar_map
 val set_eq_sort : evar_map -> esorts -> esorts -> evar_map
 val set_eq_level : evar_map -> Univ.Level.t -> Univ.Level.t -> evar_map
 val set_leq_level : evar_map -> Univ.Level.t -> Univ.Level.t -> evar_map
 val set_eq_instances : ?flex:bool ->
-  evar_map -> UVars.Instance.t -> UVars.Instance.t -> evar_map
+  evar_map -> einstance -> einstance -> evar_map
 
 val set_eq_qualities : evar_map -> Sorts.Quality.t -> Sorts.Quality.t -> evar_map
 val set_above_prop : evar_map -> Sorts.Quality.t -> evar_map
@@ -582,10 +596,11 @@ val check_eq : evar_map -> esorts -> esorts -> bool
 val check_leq : evar_map -> esorts -> esorts -> bool
 
 val check_constraints : evar_map -> Univ.Constraints.t -> bool
-val check_qconstraints : evar_map -> Sorts.QConstraints.t -> bool
+val check_elim_constraints : evar_map -> Sorts.ElimConstraints.t -> bool
 val check_quconstraints : evar_map -> Sorts.QUConstraints.t -> bool
 
 val ustate : evar_map -> UState.t
+val elim_graph : evar_map -> QGraph.t
 val evar_universe_context : evar_map -> UState.t [@@deprecated "(9.0) Use [Evd.ustate]"]
 
 val universe_context_set : evar_map -> Univ.ContextSet.t
@@ -636,15 +651,15 @@ val update_sigma_univs : UGraph.t -> evar_map -> evar_map
 val fresh_sort_in_quality : ?loc:Loc.t -> ?rigid:rigid
   -> evar_map -> UnivGen.QualityOrSet.t -> evar_map * esorts
 val fresh_constant_instance : ?loc:Loc.t -> ?rigid:rigid
-  -> env -> evar_map -> Constant.t -> evar_map * pconstant
+  -> env -> evar_map -> Constant.t -> evar_map * Constant.t puniverses
 val fresh_inductive_instance : ?loc:Loc.t -> ?rigid:rigid
-  -> env -> evar_map -> inductive -> evar_map * pinductive
+  -> env -> evar_map -> inductive -> evar_map * inductive puniverses
 val fresh_constructor_instance : ?loc:Loc.t -> ?rigid:rigid
-  -> env -> evar_map -> constructor -> evar_map * pconstructor
+  -> env -> evar_map -> constructor -> evar_map * constructor puniverses
 val fresh_array_instance : ?loc:Loc.t -> ?rigid:rigid
-  -> env -> evar_map  -> evar_map * UVars.Instance.t
+  -> env -> evar_map  -> evar_map * einstance
 
-val fresh_global : ?loc:Loc.t -> ?rigid:rigid -> ?names:UVars.Instance.t -> env ->
+val fresh_global : ?loc:Loc.t -> ?rigid:rigid -> ?names:einstance -> env ->
   evar_map -> GlobRef.t -> evar_map * econstr
 
 (********************************************************************)
@@ -688,7 +703,7 @@ module MiniEConstr : sig
   end
 
   module EInstance : sig
-    type t
+    type t = einstance
     val make : UVars.Instance.t -> t
     val kind : evar_map -> t -> UVars.Instance.t
     val empty : t

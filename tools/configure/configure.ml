@@ -22,8 +22,10 @@ open CmdArgs.Prefs
 
 let (/) = Filename.concat
 
-let coq_version = "9.1+alpha"
-let vo_magic = 90099
+let coq_version = "9.2+alpha"
+(* format: "%d%02d%d" major minor patch
+   for pre-release version (eg 9.2+alpha), use the previous minor, and patch = 99 *)
+let vo_magic = 90199
 let is_a_released_version = false
 
 (** Default OCaml binaries *)
@@ -195,7 +197,7 @@ let check_for_zarith prefs =
     else
       die ("Zarith version 1.11 is required, you have " ^ zarith_version)
 
-(** * Installation directories : bindir, libdir, mandir, docdir, etc *)
+(** * Installation directories : bindir, libdir, docdir, etc *)
 
 (* Source code root *)
 let coqsrc = Sys.getcwd ()
@@ -235,7 +237,6 @@ let install prefs =
   ; InstallDir.make "COQLIBINSTALL" "the Rocq library" prefs.libdir (Relative "lib/coq") (Relative "lib/coq")
   ; InstallDir.make "CONFIGDIR" "the Rocqide configuration files" prefs.configdir (Relative "config") (Absolute "/etc/xdg/coq")
   ; InstallDir.make "DATADIR" "the Rocqide data files" prefs.datadir (Relative "share/coq") (Relative "share/coq")
-  ; InstallDir.make "MANDIR" "the Rocq man pages" prefs.mandir (Relative "share/man") (Relative "share/man")
   ; InstallDir.make "DOCDIR" "documentation prefix path for all Rocq packages" prefs.docdir (Relative "share/doc") (Relative "share/doc")
   ]
 

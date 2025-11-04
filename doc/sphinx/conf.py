@@ -36,7 +36,7 @@ sys.path.append(os.path.abspath('../tools/'))
 sys.path.append(os.path.abspath('../../config/'))
 
 # Disable the correct_copyright_year misfeature from Sphinx
-# See https://github.com/coq/coq/issues/7378
+# See https://github.com/rocq-prover/rocq/issues/7378
 sphinx.config.correct_copyright_year = lambda *args, **kwargs: None
 
 import coq_config
@@ -50,7 +50,7 @@ with open("refman-preamble.rst") as s:
 # -- General configuration ------------------------------------------------
 
 # If your documentation needs a minimal Sphinx version, state it here.
-needs_sphinx = '4.5.0'
+needs_sphinx = '4.3.0'
 
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
@@ -60,12 +60,12 @@ extensions = [
     'sphinx.ext.mathjax',
     'sphinx.ext.todo',
     'sphinxcontrib.bibtex',
-    'coqrst.coqdomain'
+    'rocqrst.rocqdomain'
 ]
 
-# Change this to "info" or "warning" to get notifications about undocumented Coq
+# Change this to "info" or "warning" to get notifications about undocumented Rocq
 # objects (objects with no contents).
-report_undocumented_coq_objects = "warning"
+report_undocumented_rocq_objects = "warning"
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -112,7 +112,7 @@ master_doc = "index"
 
 # General information about the project.
 project = 'The Rocq Prover'
-copyright = '1999-2024, Inria, CNRS and contributors'
+copyright = '1999-2025, Inria, CNRS and contributors'
 author = 'The Rocq Development Team'
 
 # The version info for the project you're documenting, acts as replacement for
@@ -146,17 +146,15 @@ exclude_patterns = [
     '.DS_Store',
     'introduction.rst',
     'refman-preamble.rst',
-    'README.rst',
-    'README.gen.rst',
-    'README.template.rst'
+    'README.rst'
 ] + ["*.{}.rst".format(fmt) for fmt in SUPPORTED_FORMATS]
 
 # The reST default role (used for this markup: `text`) to use for all
 # documents.
 default_role = 'literal'
 
-# Use the Coq domain
-primary_domain = 'coq'
+# Use the Rocq domain
+primary_domain = 'rocq'
 
 # If true, '()' will be appended to :func: etc. cross-reference text.
 #add_function_parentheses = True
@@ -199,7 +197,7 @@ html_theme = 'sphinx_rtd_theme'
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
 # documentation.
-PDF_URL = "https://github.com/coq/coq/releases/download/V{version}/rocq-{version}-reference-manual.pdf"
+PDF_URL = "https://github.com/rocq-prover/rocq/releases/download/V{version}/rocq-{version}-reference-manual.pdf"
 html_theme_options = {
     'collapse_navigation': False
 }
@@ -213,6 +211,7 @@ html_context = {
     'versions': [
         ("dev", "https://rocq-prover.org/doc/master/refman/"),
         ("stable", "https://rocq-prover.org/refman/"),
+        ("9.1", "https://rocq-prover.org/doc/v9.1/refman/"),
         ("9.0", "https://rocq-prover.org/doc/v9.0/refman/"),
         ("8.20", "https://rocq-prover.org/doc/V8.20.1/refman/"),
         ("8.19", "https://rocq-prover.org/doc/V8.19.2/refman/"),
@@ -354,7 +353,7 @@ latex_elements = {
                  \usepackage{refman-preamble}
 
                  % Style definitions for notations
-                 \usepackage{coqnotations}
+                 \usepackage{rocqnotations}
 
                  % Style tweaks
                  \newcssclass{sigannot}{\textrm{#1:}}
@@ -378,7 +377,7 @@ latex_use_xindy = False
 
 latex_additional_files = [
     "refman-preamble.sty",
-    "_static/coqnotations.sty"
+    "_static/rocqnotations.sty"
 ]
 
 latex_documents = [('index', f'rocq-{version}-reference-manual.tex', 'The Rocq Prover Reference Manual', author, 'manual')]
@@ -398,7 +397,7 @@ latex_show_urls = 'footnote'
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
 #man_pages = [
-#    (master_doc, 'coq', 'Coq Documentation',
+#    (master_doc, 'rocq', 'Rocq Documentation',
 #     [author], 1)
 #]
 
@@ -412,8 +411,8 @@ latex_show_urls = 'footnote'
 # (source start file, target name, title, author,
 #  dir menu entry, description, category)
 #texinfo_documents = [
-#    (master_doc, 'Coq', 'Coq Documentation',
-#     author, 'Coq', 'One line description of project.',
+#    (master_doc, 'Rocq', 'Rocq Documentation',
+#     author, 'Rocq', 'One line description of project.',
 #     'Miscellaneous'),
 #]
 

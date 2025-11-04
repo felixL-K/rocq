@@ -29,7 +29,7 @@ There is also a byte-code toplevel `rocq repl-with-drop` based on an OCaml tople
 You can switch to the OCaml toplevel with the command ``Drop.``,
 and come back to the Rocq toplevel with the command ``#go;;``.
 
-.. flag:: Coqtop Exit On Error
+.. flag:: Rocqtop Exit On Error
 
    This :term:`flag`, off by default, causes `rocq top` to exit with status code
    ``1`` if a command produces an error instead of recovering from it.
@@ -201,6 +201,7 @@ Environment variables
 ``$ROCQPATH`` can be used to specify the :term:`load path`. It is a list of directories separated by
 ``:`` (``;`` on Windows). Coq will also honor ``$XDG_DATA_HOME`` and
 ``$XDG_DATA_DIRS`` (see Section :ref:`logical-paths-load-path`).
+The added loadpaths are considered installed, see :cmd:`Print LoadPath`.
 
 .. TODO PR: Correct ref above?
 
@@ -303,6 +304,8 @@ and ``rocq repl``, unless stated otherwise:
   the :term:`logical name` of the package in `From` clause of the :cmd:`Require`
   command *or* provide a fully qualified name.
 
+  The added loadpath is considered local, see :cmd:`Print LoadPath`.
+
 :-R *directory dirpath*: Similar to ``-Q`` *directory dirpath*, but allows using
   :cmd:`Require` with a partially qualified name (i.e. without a `From` clause).
 
@@ -313,8 +316,8 @@ and ``rocq repl``, unless stated otherwise:
   the input file and the corresponding `-R` / `-Q` options.
 :-exclude-dir *directory*: Exclude any subdirectory named *directory*
   while processing options such as -R and -Q. By default, only the
-  conventional version control management directories named CVS
-  and_darcs are excluded.
+  conventional version control management directories named ``CVS``
+  and ``_darcs`` are excluded.
 :-nois, -noinit: Start from an empty state instead of loading the `Init.Prelude`
   module.
 :-init-file *file*: Load *file* as the resource file instead of

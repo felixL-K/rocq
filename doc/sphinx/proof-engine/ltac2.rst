@@ -8,11 +8,13 @@ Ltac2
 General design
 --------------
 
-There are various alternatives to Ltac1, such as Mtac or Rtac for instance.
-While those alternatives can be quite different from Ltac1, we designed
-Ltac2 to be as close as reasonably possible to Ltac1, while fixing its
-:ref:`defects <ltac_defects>`.
+Ltac2 is a tactics metalanguage for Rocq. It is mostly used to write new
+tactics using a mix of :cmd:`Ltac2` definitions and :cmd:`Ltac2 Notation`\s.
+Ltac2 provides an API in the various modules of the Ltac2 library, see
+`the relevant section of Corelib's documentation <../../corelib/index.html#Ltac2>`_.
 
+Ltac2 is designed to be as close as reasonably possible to Ltac1, while fixing its
+:ref:`defects <ltac_defects>`.
 In particular, Ltac2 is:
 
 - a member of the ML family of languages, i.e.
@@ -75,11 +77,11 @@ close to OCaml. Types follow the simply-typed syntax of OCaml.
 .. insertprodn ltac2_type ltac2_typevar
 
 .. prodn::
-   ltac2_type ::= @ltac2_type2 -> @ltac2_type
+   ltac2_type ::= @ltac2_type -> @ltac2_type
    | @ltac2_type2
-   ltac2_type2 ::= @ltac2_type1 * {+* @ltac2_type1 }
+   ltac2_type2 ::= @ltac2_type2 * {+* @ltac2_type1 }
    | @ltac2_type1
-   ltac2_type1 ::= @ltac2_type0 @qualid
+   ltac2_type1 ::= @ltac2_type1 @qualid
    | @ltac2_type0
    ltac2_type0 ::= ( {+, @ltac2_type } ) {? @qualid }
    | @ltac2_typevar
@@ -221,18 +223,18 @@ There is dedicated syntax for list and array literals.
 .. insertprodn ltac2_expr ltac2_atom
 
 .. prodn::
-   ltac2_expr ::= @ltac2_expr5 ; @ltac2_expr
+   ltac2_expr ::= @ltac2_expr ; @ltac2_expr
    | @ltac2_expr5
    ltac2_expr5 ::= fun {+ @tac2pat0 } {? : @ltac2_type } => @ltac2_expr
    | let {? rec } @ltac2_let_clause {* with @ltac2_let_clause } in @ltac2_expr
    | @ltac2_expr3
    ltac2_let_clause ::= {+ @tac2pat0 } {? : @ltac2_type } := @ltac2_expr
-   ltac2_expr3 ::= {+, @ltac2_expr2 }
-   ltac2_expr2 ::= @ltac2_expr1 :: @ltac2_expr2
+   ltac2_expr3 ::= {+, @ltac2_expr3 }
+   ltac2_expr2 ::= @ltac2_expr2 :: @ltac2_expr2
    | @ltac2_expr1
-   ltac2_expr1 ::= @ltac2_expr0 {+ @ltac2_expr0 }
-   | @ltac2_expr0 .( @qualid )
-   | @ltac2_expr0 .( @qualid ) := @ltac2_expr5
+   ltac2_expr1 ::= @ltac2_expr1 {+ @ltac2_expr0 }
+   | @ltac2_expr1 .( @qualid )
+   | @ltac2_expr1 .( @qualid ) := @ltac2_expr5
    | @ltac2_expr0
    tac2rec_fieldexpr ::= @qualid {? := @ltac2_expr1 }
    ltac2_expr0 ::= ( @ltac2_expr )
@@ -246,7 +248,7 @@ There is dedicated syntax for list and array literals.
    tac2rec_fieldpats ::= @tac2rec_fieldpat ; {? @tac2rec_fieldpats }
    | @tac2rec_fieldpat ;
    | @tac2rec_fieldpat
-   tac2rec_fieldpat ::= @qualid {? := @tac2pat1 }
+   tac2rec_fieldpat ::= @qualid {? := @tac2pat3 }
    ltac2_atom ::= @integer
    | @string
    | @qualid
@@ -307,11 +309,8 @@ Ltac2 Definitions
    The previous value of the binding can be optionally accessed using the `as`
    binding syntax.
 
-   The effect of this command is limited to the current section or module.
-   When not in a section, importing the module containing this command
-   applies the redefinition again.
-   In other words it acts according to :attr:`local` in sections and
-   :attr:`export` otherwise (but explicit locality is not supported).
+   This command supports :term:`attributes <attribute>` :attr:`local` and :attr:`export`.
+   By default it is `export` outside sections. Inside sections it is `local` and does not support `export`.
 
    .. example:: Dynamic nature of mutable cells
 
@@ -471,13 +470,13 @@ Ltac2 models backtracking computations using streams of values: the head of a no
 
 Backtracking failures (empty streams) are moreover decorated with exceptions to inform the reason of failure. These exceptions are then passed to the tail of a non-empty backtracking computation. The following Ltac2 type summarizes the model for backtracking computations
 
-  .. rocqtop:: in
+.. rocqtop:: in
 
-    Ltac2 Type rec 'a backtracking_stream :=
-      [ EmptyStream(exn)
-      | ConsStream('a, (exn -> 'a backtracking_stream)) ].
+  Ltac2 Type rec 'a backtracking_stream :=
+    [ EmptyStream(exn) (* backtracking failure holding an exception *)
+    | ConsStream('a, (exn -> 'a backtracking_stream)) ] (* backtracking success *).
 
-where `EmptyStream` is a backtracking failure holding an exception and `ConsStream` is a backtracking success with a value `'a` as its head and a backtracking handler parameterized by an exception. When sequenced with additional backtracking computations, a backtracking success may lead to a failure with an exception that will be passed to the handler.
+where `ConsStream` is a backtracking success with a value of type `'a` as its head and a backtracking handler parameterized by an exception. When sequenced with additional backtracking computations, a backtracking success may lead to a failure with an exception that will be passed to the handler.
 
 
 In practice, the backtracking aspects of Ltac2's computations can be accessed through the following primitives, defined in the `Control` module::
@@ -622,13 +621,10 @@ Built-in quotations
 The current implementation recognizes the following built-in quotations:
 
 - ``ident``, which parses identifiers (type ``Init.ident``).
-- ``constr``, which parses Rocq terms and produces an-evar free term at runtime
+- ``constr``, which parses Rocq terms and produces an evar-free term at runtime
   (type ``Init.constr``).
-- ``lconstr``, which is equivalent to ``constr`` but at precedence level 200.
 - ``open_constr``, which parses Rocq terms and produces a term potentially with
   holes at runtime (type ``Init.constr`` as well).
-- ``open_lconstr``, which is equivalent to ``open_constr`` but at precedence
-  level 200.
 - ``preterm``, which parses Rocq terms and produces a value which must
   be typechecked with ``Constr.pretype`` (type ``Init.preterm``).
 - ``pat``, which parses Rocq patterns and produces a pattern used for term
@@ -821,6 +817,14 @@ Similarly variables of type `preterm` have an antiquotation
 
 It is equivalent to pretyping the preterm with the appropriate typing constraint.
 
+Variables of type `ident` have an antiquotation
+
+.. prodn:: term += $preterm:@lident
+
+interpreting the ident as an hypothesis. This is for dynamically-named
+hypotheses where `&` is for statically-named hypotheses, in other
+words `let x := @y in constr:($hyp:x)` is equivalent to `constr:(&y)`.
+
 Variables of type `pattern` have an antiquotation
 
 .. prodn:: term += $pattern:@lident
@@ -898,11 +902,11 @@ in a less hard-wired way.
       metavariables in the form :n:`?@ident` and :n:`@?@ident`.  :g:`_` can be used to match
       irrelevant terms.
 
-      .. todo more on @?@ident here: https://github.com/coq/coq/pull/12085#discussion_r467504046
+      .. todo more on @?@ident here: https://github.com/rocq-prover/rocq/pull/12085#discussion_r467504046
       .. todo Example is broken :ref:`Example<ltac2_match_with_holes_ex>`.
 
       .. todo Didn't understand the following 2 paragraphs well enough to revise
-         see https://github.com/coq/coq/pull/12103#discussion_r436297754 for a
+         see https://github.com/rocq-prover/rocq/pull/12103#discussion_r436297754 for a
          possible example
 
       Unlike Ltac1, Ltac2 :n:`?id` metavariables only match closed terms.
@@ -927,7 +931,7 @@ in a less hard-wired way.
       :flag:`Printing All` flag).  :ref:`Example<ltac2_match_term_context_ex>`.
 
    .. todo There's a more realistic example from @JasonGross here:
-      https://github.com/coq/coq/pull/12103#discussion_r432996954
+      https://github.com/rocq-prover/rocq/pull/12103#discussion_r432996954
 
    :n:`@ltac2_expr`
       The tactic to apply if the construct matches.  Metavariable values from the pattern
@@ -957,7 +961,7 @@ one from Ltac1, except that it requires the goal to be focused.
    (Equivalent to this :ref:`Ltac1 example<match_vs_lazymatch_ex>`.)
 
    These lines define a `msg` tactic that's used in several examples as a more-succinct
-   alternative to `print (to_string "...")`:
+   alternative to `print (of_string "...")`:
 
    .. rocqtop:: in
 
@@ -1075,9 +1079,9 @@ Match over goals
    multiple hypotheses or across a hypothesis and the current goal, the expressions match if
    they are :term:`convertible`.
 
-   .. more detail here: https://github.com/coq/coq/pull/12085#discussion_r470406466
+   .. more detail here: https://github.com/rocq-prover/rocq/pull/12085#discussion_r470406466
 
-   :n:`{*, @gmatch_pattern }`
+   :n:`{*, @gmatch_hyp_pattern }`
       Patterns to match with hypotheses.  Each pattern must match a distinct hypothesis in order
       for the branch to match.
 
@@ -1214,11 +1218,13 @@ Match on values
 
    .. prodn::
       ltac2_branches ::= {? %| } {+| {? @atomic_tac2pat } => @ltac2_expr }
+      tac2pat3 ::= @tac2pat3 %| {+| @tac2pat2 }
+      | @tac2pat3 as @ident
+      | @tac2pat2
+      tac2pat2 ::= @tac2pat2 :: @tac2pat2
+      | @tac2pat1
       tac2pat1 ::= @qualid {+ @tac2pat0 }
       | @qualid
-      | @tac2pat0 :: @tac2pat0
-      | @tac2pat0 %| {+| @tac2pat1 }
-      | @tac2pat0 as @ident
       | @tac2pat0
       tac2pat0 ::= _
       | ()
@@ -1227,10 +1233,10 @@ Match on values
       | @qualid
       | ( {? @atomic_tac2pat } )
       | %{ {? @tac2rec_fieldpats } %}
-      | [ {*; @tac2pat1 } ]
-      atomic_tac2pat ::= @tac2pat1 : @ltac2_type
-      | @tac2pat1 , {*, @tac2pat1 }
-      | @tac2pat1
+      | [ {*; @tac2pat3 } ]
+      atomic_tac2pat ::= @tac2pat3 : @ltac2_type
+      | @tac2pat3 , {*, @tac2pat3 }
+      | @tac2pat3
 
 .. tacn:: if @ltac2_expr5__test then @ltac2_expr5__then else @ltac2_expr5__else
    :name: if-then-else (Ltac2)
@@ -1245,7 +1251,7 @@ Match on values
 Notations
 ---------
 
-.. cmd:: Ltac2 Notation {+ @ltac2_syntax_class } {? : @natural } := @ltac2_expr
+.. cmd:: Ltac2 Notation {+ @ltac2_syntax_class } {? {| : @natural | : @qualid {? ( @natural ) } } } := @ltac2_expr
 
    .. todo seems like name maybe should use lident rather than ident, considering:
 
@@ -1262,12 +1268,20 @@ Notations
 
    :cmd:`Ltac2 Notation` provides a way to extend the syntax of Ltac2 tactics.  The left-hand
    side (before the `:=`) defines the syntax to recognize and gives formal parameter
-   names for the syntactic values.  :n:`@integer` is the level of the notation.
+   names for the syntactic values.
+
+   :n:`@natural` is the level of the notation (:n:`@ident(@natural)`
+   means :cmd:`custom entry <Ltac2 Custom Entry>` :n:`@ident` at level
+   :n:`@natural`). For the default entry when the level is not
+   provided, if the notation starts with a string which is an
+   identifier (e.g. `"apply"`) the level is `1`, otherwise it is `5`.
+   Custom entries must have explicit levels.
+
    When the notation is used, the values are substituted
    into the right-hand side.  In the following example, `x` is the formal parameter name and
    `constr` is its :ref:`syntactic class<syntactic_classes>`.  `print` and `of_constr` are
    functions provided by Rocq through `Message.v`.
-   (Also see :cmd:`Ltac2 Notation (abbreviation)`.)
+   (Also see :cmd:`Ltac2 Abbreviation`.)
 
    .. flag:: Ltac2 Typed Notations
 
@@ -1349,15 +1363,21 @@ Notations
 
       The level of a notation must be an integer between 0 and 6 inclusive.
 
+.. cmd:: Ltac2 Custom Entry @ident
+
+   Define a new grammar entry for Ltac2 expressions (as :cmd:`Declare
+   Custom Entry` does for terms). Parsing rules can be added to the
+   entry with :cmd:`Ltac2 Notation`, and the entry can be used as a
+   :ref:`syntactic class <syntactic_classes>`.
+
 Abbreviations
 ~~~~~~~~~~~~~
 
-.. cmd:: Ltac2 Notation @ident := @ltac2_expr
-   :name: Ltac2 Notation (abbreviation)
+.. cmd:: Ltac2 Abbreviation @ident := @ltac2_expr
 
    Introduces a special kind of notation, called an abbreviation,
    that does not add any parsing rules. It is similar in
-   spirit to Rocq abbreviations (see :cmd:`Notation (abbreviation)`,
+   spirit to Rocq abbreviations (see :cmd:`Abbreviation`),
    insofar as its main purpose is to give an
    absolute name to a piece of pure syntax, which can be transparently referred to
    by this name as if it were a proper definition.
@@ -1371,7 +1391,9 @@ Abbreviations
 
    For instance, suppose that we define the following.
 
-   :n:`Ltac2 Notation foo := fun x => x ().`
+   .. rocqdoc::
+
+      Ltac2 Abbreviation foo := fun x => x ().
 
    Then we have the following expansion at internalization time.
 
@@ -1388,7 +1410,7 @@ Defining tactics
 ~~~~~~~~~~~~~~~~
 
 Built-in tactics (those defined in OCaml code in the Rocq executable) and Ltac1 tactics,
-which are defined in `.v` files, must be defined through notations.  (Ltac2 tactics can be
+which are defined in `.v` files, must be defined through notations. Ltac2 tactics can be
 defined with :cmd:`Ltac2`.
 
 Notations for many but not all built-in tactics are defined in `Notations.v`, which is automatically
@@ -1451,39 +1473,48 @@ Metasyntactic operations that can be applied to other syntactic classes are:
 
   :n:`opt(@ltac2_syntax_class)`
     Parses an optional :token:`ltac2_syntax_class`.  The associated value is either :n:`None` or
-    enclosed in :n:`Some`
+    enclosed in :n:`Some`.
 
   :n:`list1(@ltac2_syntax_class {? , @string })`
-    Parses a list of one or more :token:`ltac2_syntax_class`\s.  If :token:`string` is specified,
+    Parses a list of one or more :token:`ltac2_syntax_class`\es.  If :token:`string` is specified,
     items must be separated by :token:`string`.
 
   :n:`list0(@ltac2_syntax_class {? , @string })`
-    Parses a list of zero or more :token:`ltac2_syntax_class`\s.  If :token:`string` is specified,
+    Parses a list of zero or more :token:`ltac2_syntax_class`\es.  If :token:`string` is specified,
     items must be separated by :token:`string`.  For zero items, the associated value
     is an empty list.
 
   :n:`seq({+, @ltac2_syntax_class })`
-    Parses the :token:`ltac2_syntax_class`\s in order.  The associated value is a tuple,
-    omitting :token:`ltac2_syntax_class`\s that are :token:`string`\s.
+    Parses the :token:`ltac2_syntax_class`\es in order.  The associated value is a tuple,
+    omitting :token:`ltac2_syntax_class`\es that are :token:`string`\s.
     `self` and `next` are not permitted within `seq`.
 
 The following classes represent nonterminals with some special handling.  The
-table further down lists the classes that that are handled plainly.
+table further down lists the classes that are handled plainly.
 
   :n:`constr {? ( {+, @scope_key } ) }`
     Parses a :token:`term`.  If specified, the :token:`scope_key`\s are used to interpret
     the term (as described in  :ref:`LocalInterpretationRulesForNotations`).  The last
     :token:`scope_key` is the top of the scope stack that's applied to the :token:`term`.
 
+  :n:`lconstr {? ( {+, @scope_key } ) }`
+     Identical to `constr` but the term is parsed at precedence level 200.
+
   :n:`open_constr {? ( {+, @scope_key } ) }`
     Parses an open :token:`term`. Like :n:`constr` above, this class
     accepts a list of notation scopes with the same effects.
+
+  :n:`open_lconstr {? ( {+, @scope_key } ) }`
+     Identical to `open_constr` but the term is parsed at precedence level 200.
 
 .. _preterm:
 
   :n:`preterm {? ( {+, @scope_key } ) }`
     Parses a non-typechecked :token:`term`. Like :n:`constr` above, this class
     accepts a list of notation scopes with the same effects.
+
+  :n:`lpreterm {? ( {+, @scope_key } ) }`
+     Identical to `preterm` but the term is parsed at precedence level 200.
 
   :n:`ident`
     Parses :token:`ident` or :n:`$@ident`.  The first form returns :n:`ident:(@ident)`,
@@ -1982,36 +2013,48 @@ at the call site.
 
 A typical example of a delayed function:
 
-:n:`Ltac foo := blah.`
+.. rocqdoc::
+
+   Ltac foo := blah.
 
 becomes
 
-:n:`Ltac2 foo () := blah.`
+.. rocqdoc::
+
+   Ltac2 foo () := blah.
 
 All subsequent calls to `foo` must be applied to perform the same effect as
 before.
 
 Likewise, for arguments:
 
-:n:`Ltac bar tac := tac; tac; tac.`
+.. rocqdoc::
+
+   Ltac bar tac := tac; tac; tac.
 
 becomes
 
-:n:`Ltac2 bar tac := tac (); tac (); tac ().`
+.. rocqdoc::
+
+   Ltac2 bar tac := tac (); tac (); tac ().
 
 We recommend the use of syntactic notations to ease the transition. For
 instance, the first example can alternatively be written as:
 
-:n:`Ltac2 foo0 () := blah.`
-:n:`Ltac2 Notation foo := foo0 ().`
+.. rocqdoc::
+
+   Ltac2 foo0 () := blah.
+   Ltac2 Notation foo := foo0 ().
 
 This allows to keep the subsequent calls to the tactic as-is, as the
 expression `foo` will be implicitly expanded everywhere into `foo0 ()`. Such
 a trick also works for arguments, as arguments of syntactic notations are
 implicitly thunked. The second example could thus be written as follows.
 
-:n:`Ltac2 bar0 tac := tac (); tac (); tac ().`
-:n:`Ltac2 Notation bar := bar0.`
+.. rocqdoc::
+
+   Ltac2 bar0 tac := tac (); tac (); tac ().
+   Ltac2 Notation bar := bar0.
 
 Variable binding
 ~~~~~~~~~~~~~~~~

@@ -10,16 +10,16 @@ The documentation of the latest released version is available on the Coq
 web site at [rocq-prover.org/docs](https://rocq-prover.org/docs).
 
 Additionally, you can view the reference manual for the development version
-at <https://coq.github.io/doc/master/refman/>, and the documentation of the
+at <https://rocq-prover.org/doc/master/refman/>, and the documentation of the
 standard library for the development version at
-<https://coq.github.io/doc/master/stdlib/>.
+<https://rocq-prover.org/doc/master/stdlib/>.
 
 The reference manual is written in reStructuredText and compiled
 using Sphinx. See [`sphinx/README.rst`](sphinx/README.rst)
 to learn more about the format that is used.
 
 The documentation for the standard library is generated from
-the `.v` source files using coqdoc.
+the `.v` source files using `rocq doc`.
 
 Dependencies
 ------------
@@ -30,12 +30,12 @@ To produce the complete documentation in HTML, you will need Coq dependencies
 listed in [`INSTALL.md`](../INSTALL.md). Additionally, the Sphinx-based
 reference manual requires Python 3, and the following Python packages:
 
-  - sphinx >= 4.5.0
-  - sphinx_rtd_theme >= 1.0.0
-  - beautifulsoup4 >= 4.8.2
+  - sphinx >= 5.0.0
+  - sphinx_rtd_theme >= 1.1.0
+  - beautifulsoup4 >= 4.10.0
   - antlr4-python3-runtime >= 4.7.1 & <= 4.9.3
-  - pexpect >= 4.6.0
-  - sphinxcontrib-bibtex >= 0.4.2
+  - pexpect >= 4.8.0
+  - sphinxcontrib-bibtex >= 2.4.2
 
 To install them, you should first install pip and setuptools (for instance,
 with `apt install python3-pip python3-setuptools` on Debian / Ubuntu) then run:

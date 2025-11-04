@@ -250,7 +250,7 @@ principles of extraction (logical parts and types).
    The extracted code will omit these arguments.
    Here :token:`qualid` can be
    any function or inductive constructor, and the :token:`ident`\s are
-   the names of the useless arguments.  Arguments can can also be
+   the names of the useless arguments.  Arguments can also be
    identified positionally by :token:`integer`\s starting from 1.
 
 When an actual extraction takes place, an error is normally raised if the
@@ -267,6 +267,15 @@ This behavior can be relaxed via the following flag:
    (in the code, some comments mark the location of these remaining implicit arguments).
    Note that this extracted code might not compile or run properly,
    depending of the use of these remaining implicit arguments.
+
+Accessing opaque proofs
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. flag:: Extraction AccessOpaque
+
+   By default extraction will treat opaque proofs (concluded with
+   :cmd:`Qed`) as though they were transparent. Turning this :term:`flag` off
+   will instead treat them as axioms.
 
 Realizing axioms
 ~~~~~~~~~~~~~~~~
@@ -427,7 +436,8 @@ As an example of translation to a non-inductive datatype, let's turn
 
 .. rocqtop:: in
 
-   Extract Inductive nat => int [ "0" "succ" ] "(fun fO fS n -> if n=0 then fO () else fS (n-1))".
+   Extract Inductive nat => int [ "0" "succ" ]
+      "(fun fO fS n -> if n=0 then fO () else fS (n-1))".
 
 Generating FFI Code
 ~~~~~~~~~~~~~~~~~~~
@@ -540,7 +550,7 @@ Avoiding conflicts with existing filenames
 
 When using :cmd:`Extraction Library`, the names of the extracted files
 directly depend on the names of the Rocq files. It may happen that
-these filenames are in conflict with already existing files, 
+these filenames conflict with already existing files,
 either in the standard library of the target language or in other
 code that is meant to be linked with the extracted code. 
 For instance the module ``List`` exists both in Rocq and in OCaml.
@@ -661,7 +671,7 @@ In OCaml, we must cast any argument of the constructor dummy
 
 Even with those unsafe castings, you should never get error like
 ``segmentation fault``. In fact even if your program may seem
-ill-typed to the OCaml type checker, it can't go wrong : it comes
+ill-typed to the OCaml type checker, it can't go wrong: it comes
 from a Rocq well-typed terms, so for example inductive types will always
 have the correct number of arguments, etc. Of course, when launching
 manually some extracted function, you should apply it to arguments
@@ -746,18 +756,18 @@ Note that these ``nat_of_int`` and ``int_of_nat`` are now
 available via a mere ``From Stdlib Require Import ExtrOcamlIntConv`` and then
 adding these functions to the list of functions to extract. This file
 ``ExtrOcamlIntConv.v`` and some others in ``plugins/extraction/``
-are meant to help building concrete program via extraction.
+are meant to help build concrete programs via extraction.
 
 Extraction's horror museum
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Some pathological examples of extraction are grouped in the file
-``test-suite/success/extraction.v`` of the sources of Rocq.
+``test-suite/success/extraction_*.v`` of the sources of Rocq.
 
 Users' Contributions
 ~~~~~~~~~~~~~~~~~~~~
 
-Several of user contributions use extraction to produce
+Several user contributions use extraction to produce
 certified programs. In particular the following ones have an automatic
 extraction test:
 

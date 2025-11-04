@@ -4,14 +4,14 @@ Writing Rocq libraries and plugins
 This section presents the part of the Rocq language that is useful only
 to library and plugin authors.  A tutorial for writing Rocq plugins is
 available in the Rocq repository in `doc/plugin_tutorial
-<https://github.com/coq/coq/tree/master/doc/plugin_tutorial>`_.
+<https://github.com/rocq-prover/rocq/tree/master/doc/plugin_tutorial>`_.
 
 Deprecating library objects, tactics or library files
 -----------------------------------------------------
 
 You may use the following :term:`attribute` to deprecate a notation,
 tactic, definition, axiom, theorem or file.  When renaming a definition or theorem, you can introduce a
-deprecated compatibility alias using :cmd:`Notation (abbreviation)`
+deprecated compatibility alias using :cmd:`Abbreviation`
 (see :ref:`the example below <compatibility-alias>`).
 
 .. attr:: deprecated ( {? since = @string , } {? note = @string , } {? use = @qualid } )
@@ -30,8 +30,8 @@ deprecated compatibility alias using :cmd:`Notation (abbreviation)`
    compiled library file, use :cmd:`Attributes`.
 
    The :n:`use` attribute can be used for commands such as :cmd:`Definition`,
-   :cmd:`Theorem`, and ``Notation @ident``. Its value must refer to an
-   existing constant of abbreviation and is printed as part of the warning
+   :cmd:`Theorem`, and :cmd:`Abbreviation`. Its value must refer to an
+   existing constant or abbreviation and is printed as part of the warning
    message as well as used by LSP based user interfaces as a quick fix.
 
    It can trigger the following warnings:
@@ -138,7 +138,7 @@ notation, definition, axiom, theorem or file.
 
       Definition bar x := S x.
       #[deprecated(since="mylib 1.2", note="Use bar instead.")]
-      Notation foo := bar (only parsing).
+      Abbreviation foo := bar (only parsing).
 
    Then, the following code still works, but emits a warning:
 

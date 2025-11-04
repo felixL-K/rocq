@@ -26,11 +26,6 @@ val destr_functor : ('ty,'a) functorize -> MBId.t * 'ty * ('ty,'a) functorize
 
 val destr_nofunctor : ModPath.t -> ('ty,'a) functorize -> 'a
 
-(** Conversions between [module_body] and [module_type_body] *)
-
-val module_type_of_module : module_body -> module_type_body
-val module_body_of_type : module_type_body -> module_body
-
 val check_modpath_equiv : env -> ModPath.t -> ModPath.t -> unit
 
 val annotate_module_expression : module_expression -> module_signature ->
@@ -107,50 +102,51 @@ type signature_mismatch_error =
   | RecordProjectionsExpected of Name.t list
   | NotEqualInductiveAliases
   | IncompatibleUniverses of UGraph.univ_inconsistency
+  | IncompatibleQualities of QGraph.elimination_error
   | IncompatiblePolymorphism of env * types * types
   | IncompatibleConstraints of { got : UVars.AbstractContext.t; expect : UVars.AbstractContext.t }
   | IncompatibleVariance
   | NoRewriteRulesSubtyping
 
 type subtyping_trace_elt =
-  | Submodule of Label.t
+  | Submodule of Id.t
   | FunctorArgument of int
 
 type module_typing_error =
-  | SignatureMismatch of subtyping_trace_elt list * Label.t * signature_mismatch_error
-  | LabelAlreadyDeclared of Label.t
+  | SignatureMismatch of subtyping_trace_elt list * Id.t * signature_mismatch_error
+  | LabelAlreadyDeclared of Id.t
   | NotAFunctor
   | IsAFunctor of ModPath.t
   | IncompatibleModuleTypes of module_type_body * module_type_body
   | NotEqualModulePaths of ModPath.t * ModPath.t
-  | NoSuchLabel of Label.t * ModPath.t
-  | NotAModuleLabel of Label.t
-  | NotAConstant of Label.t
-  | IncorrectWithConstraint of Label.t
-  | GenerativeModuleExpected of Label.t
-  | LabelMissing of Label.t * string
+  | NoSuchLabel of Id.t * ModPath.t
+  | NotAModuleLabel of Id.t
+  | NotAConstant of Id.t
+  | IncorrectWithConstraint of Id.t
+  | GenerativeModuleExpected of Id.t
+  | LabelMissing of Id.t * string
   | IncludeRestrictedFunctor of ModPath.t
 
 exception ModuleTypingError of module_typing_error
 
-val error_existing_label : Label.t -> 'a
+val error_existing_label : Id.t -> 'a
 
 val error_incompatible_modtypes :
   module_type_body -> module_type_body -> 'a
 
 val error_signature_mismatch :
-  subtyping_trace_elt list -> Label.t -> signature_mismatch_error -> 'a
+  subtyping_trace_elt list -> Id.t -> signature_mismatch_error -> 'a
 
-val error_no_such_label : Label.t -> ModPath.t -> 'a
+val error_no_such_label : Id.t -> ModPath.t -> 'a
 
-val error_not_a_module_label : Label.t -> 'a
+val error_not_a_module_label : Id.t -> 'a
 
-val error_not_a_constant : Label.t -> 'a
+val error_not_a_constant : Id.t -> 'a
 
-val error_incorrect_with_constraint : Label.t -> 'a
+val error_incorrect_with_constraint : Id.t -> 'a
 
-val error_generative_module_expected : Label.t -> 'a
+val error_generative_module_expected : Id.t -> 'a
 
-val error_no_such_label_sub : Label.t->string->'a
+val error_no_such_label_sub : Id.t -> string -> 'a
 
 val error_include_restricted_functor : ModPath.t -> 'a

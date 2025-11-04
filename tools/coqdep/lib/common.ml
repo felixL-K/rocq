@@ -81,16 +81,21 @@ let safe_assoc ?(warn_clashes=true) st ?(what=Library) from file k =
     | External -> Loadpath.search_other_known st in
   match search ?from k with
   | None -> None
-  | Some (Loadpath.ExactMatches (f :: l)) ->
+  | Some (Loadpath.ExactMatches fs) ->
+    let f = fs.Loadpath.point in
+    let l = Loadpath.FileSet.elements fs.files in
+    let l = List.map Loadpath.Filename.repr l in
+    let l = List.filter (fun f' -> not (String.equal f f')) l in
     if warn_clashes then warn_if_clash ~what true file k f l;
     Some [f]
   | Some (Loadpath.PartialMatchesInSameRoot (root, l)) ->
+    let l = Loadpath.FileSet.elements l.files in
+    let l = List.map Loadpath.Filename.repr l in
     (match List.sort String.compare l with [] -> assert false | f :: l as all ->
     (* If several files match, it will fail at Require;
        To be "fair", in rocq dep, we add dependencies on all matching files *)
     if warn_clashes then warn_if_clash ~what false file k f l;
     Some all)
-  | Some (Loadpath.ExactMatches []) -> assert false
 
 let file_name ~separator_hack s = function
   | None     -> s
@@ -239,7 +244,9 @@ let rec find_dependencies ({State.vAccu; separator_hack; loadpath} as st) basena
         begin match safe_assoc loadpath ~what:External (Some from) f [str] with
         | Some (file :: _) -> add_dep (Dep_info.Dep.Other (canonize ~separator_hack vAccu file))
         | Some [] -> assert false
-        | None -> warning_module_notfound (External, Some from, f, [str])
+        | None ->
+          if not (Loadpath.is_other_in_coqlib loadpath ~from [str]) then
+            warning_module_notfound (External, Some from, f, [str])
         end;
         loop ()
   in
@@ -347,7 +354,7 @@ let init ~make_separator_hack args =
   let ml_path = match rocqenv with
     | Boot -> ml_path
     | Env env ->
-      ml_path @ Boot.Env.Path.[to_string @@ relative (Boot.Env.corelib env) ".."]
+      ml_path @ Boot.Env.Path.[to_string @@ relative (Boot.Env.runtimelib env) ".."]
   in
   findlib_init ml_path;
   List.iter (add_include loadpath) args.Args.vo_path;

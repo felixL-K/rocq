@@ -49,7 +49,7 @@ check_variable () {
 : "${old_coq_version:=dev}"
 : "${num_of_iterations:=1}"
 : "${timeout:=3h}"
-: "${coq_opam_packages:=rocq-stdlib rocq-bignums coq-hott coq-performance-tests-lite coq-engine-bench-lite rocq-elpi rocq-mathcomp-ssreflect rocq-mathcomp-fingroup rocq-mathcomp-algebra rocq-mathcomp-solvable rocq-mathcomp-field rocq-mathcomp-character coq-mathcomp-odd-order coq-mathcomp-analysis coq-math-classes coq-corn coq-compcert rocq-equations coq-metacoq-utils coq-metacoq-common coq-metacoq-template coq-metacoq-pcuic coq-metacoq-safechecker coq-metacoq-erasure coq-metacoq-translations coq-color coq-coqprime coq-coqutil coq-bedrock2 coq-rewriter coq-fiat-core coq-fiat-parsers coq-fiat-crypto-with-bedrock coq-unimath coq-coquelicot coq-iris-examples coq-verdi coq-verdi-raft coq-fourcolor coq-rewriter-perf-SuperFast coq-vst coq-category-theory coq-neural-net-interp-computed-lite}"
+: "${coq_opam_packages:=rocq-stdlib rocq-bignums coq-hott coq-performance-tests-lite coq-engine-bench-lite rocq-elpi rocq-mathcomp-boot rocq-mathcomp-order rocq-mathcomp-ssreflect rocq-mathcomp-fingroup rocq-mathcomp-algebra rocq-mathcomp-solvable rocq-mathcomp-field rocq-mathcomp-character coq-mathcomp-odd-order coq-mathcomp-analysis coq-math-classes coq-corn coq-compcert rocq-equations rocq-metarocq-utils rocq-metarocq-common rocq-metarocq-template rocq-metarocq-pcuic rocq-metarocq-safechecker rocq-metarocq-erasure rocq-metarocq-translations coq-color coq-coqprime coq-coqutil coq-bedrock2 coq-rewriter coq-fiat-core coq-fiat-parsers coq-fiat-crypto-with-bedrock coq-unimath coq-coquelicot coq-iris-examples coq-verdi coq-verdi-raft coq-fourcolor coq-rewriter-perf-SuperFast coq-vst coq-category-theory coq-neural-net-interp-computed-lite}"
 : "${coq_native:=}"
 
 # example: coq-hott.dev git+https://github.com/some-user/coq-hott#some-branch
@@ -115,12 +115,10 @@ echo "DEBUG: coq_native = $coq_native"
 # We put local binaries such as opam in .bin and extend PATH
 BIN=$(pwd)/.bin
 mkdir "$BIN"
-wget https://github.com/ocaml/opam/releases/download/2.1.3/opam-2.1.3-x86_64-linux -O "$BIN"/opam
+wget https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-linux -O "$BIN"/opam
 chmod +x "$BIN"/opam
 
 export OPAMSKIPUPDATE=1 # stop opam from messing with our pin edits
-
-export NJOBS=1 # used by the test suite through dune
 
 # generate per file info in test suite and coq_makefile devs
 export TIMED=1
@@ -231,7 +229,7 @@ function coqbot_update_comment() {
         comment_text="${comment_text}${nl}${nl}${start_code_block}${nl}$(git log -n 1 "${old_coq_commit}")${nl}${end_code_block}${nl}</details>"
         comment_text="${comment_text}${nl}${nl}<details><summary>New Rocq version ${new_coq_commit}</summary>"
         comment_text="${comment_text}${nl}${nl}${start_code_block}${nl}$(git log -n 1 "${new_coq_commit}")${nl}${end_code_block}${nl}</details>"
-        comment_text="${comment_text}${nl}${nl}[Diff: ${bt}${old_coq_commit}..${new_coq_commit}${bt}](https://github.com/coq/coq/compare/${old_coq_commit}..${new_coq_commit})"
+        comment_text="${comment_text}${nl}${nl}[Diff: ${bt}${old_coq_commit}..${new_coq_commit}${bt}](https://github.com/rocq-prover/rocq/compare/${old_coq_commit}..${new_coq_commit})"
 
         # if there's a comment id, we update the comment while we're
         # in progress; otherwise, we wait until the end to post a new
@@ -262,7 +260,7 @@ if [[ $ZULIP_BENCH_BOT ]]; then
     pr_num=${pr_full%%:*}
     pr_msg=${pr_full#*:}
     zulip_header="Bench at $CI_JOB_URL
-Testing [$pr_msg](https://github.com/coq/coq/pull/$pr_num)
+Testing [$pr_msg](https://github.com/rocq-prover/rocq/pull/$pr_num)
 On packages $coq_opam_packages
 "
 
@@ -312,7 +310,7 @@ zulip_autofail() {
 }
 if [[ $zulip_post ]]; then trap zulip_autofail ERR; fi
 
-# see https://github.com/coq/coq/pull/15807
+# see https://github.com/rocq-prover/rocq/pull/15807
 if [ "$(ulimit -s)" != "unlimited" ]; then
   ulimit -S -s $((2 * $(ulimit -s)))
 fi
@@ -365,7 +363,7 @@ create_opam() {
     export OPAMROOT="$OPAM_DIR"
     export COQ_RUNNER="$RUNNER"
 
-    opam init --disable-sandboxing -qn -j$number_of_processors --bare
+    opam init --disable-sandboxing -qn -j "$number_of_processors" --bare
     # Allow beta compiler switches
     opam repo add -q --set-default beta https://github.com/ocaml/ocaml-beta-repository.git
     # Allow experimental compiler switches
@@ -378,12 +376,9 @@ create_opam() {
     else flambda=
     fi
 
-    opam switch create -qy -j$number_of_processors "ocaml-$RUNNER" "$OPAM_COMP" $flambda
+    opam switch create -qy -j "$number_of_processors" "ocaml-$RUNNER" "$OPAM_COMP" $flambda
     eval $(opam env)
 
-    # For some reason opam guesses an incorrect upper bound on the
-    # number of jobs available on Travis, so we set it here manually:
-    opam var --global jobs=$number_of_processors >/dev/null
     if [ ! -z "$BENCH_DEBUG" ]; then opam config list; fi
 
     opam repo add -q --this-switch coq-core-dev "$OPAM_COQ_DIR/core-dev"  # For rocq-stdlib
@@ -409,7 +404,7 @@ create_opam() {
       exit 1
     fi
 
-    opam install -qy -j$number_of_processors $initial_opam_packages
+    opam install -qy -j "$number_of_processors" $initial_opam_packages
     if [ ! -z "$BENCH_DEBUG" ]; then opam repo list; fi
 
     cd "$coq_dir"
@@ -548,11 +543,7 @@ $coq_opam_package (dependency $dep failed)"
             fi
         done
 
-        # OPAM 2.0 likes to ignore the -j when it feels like :S so we
-        # workaround that here.
-        opam var --global jobs=$number_of_processors >/dev/null
-
-        opam install $coq_opam_package -v -b -j$number_of_processors --deps-only -y \
+        opam install $coq_opam_package -v -b -j "$number_of_processors" --deps-only -y \
              3>$log_dir/$coq_opam_package.$RUNNER.opam_install.deps_only.stdout.log 1>&3 \
              4>$log_dir/$coq_opam_package.$RUNNER.opam_install.deps_only.stderr.log 2>&4 || {
             failed_packages="$failed_packages
@@ -560,14 +551,12 @@ $coq_opam_package (dependency install failed in $RUNNER)"
             continue 2
             }
 
-        opam var --global jobs=1 >/dev/null
-
         if [ ! -z "$BENCH_DEBUG" ]; then ls -l $working_dir; fi
 
         for iteration in $(seq $num_of_iterations); do
             export COQ_ITERATION=$iteration
             _RES=0
-            timeout "$timeout" opam install -v -b -j1 $coq_opam_package \
+            timeout "$timeout" opam install -v -b -j 1 $coq_opam_package \
                  3>$log_dir/$coq_opam_package.$RUNNER.opam_install.$iteration.stdout.log 1>&3 \
                  4>$log_dir/$coq_opam_package.$RUNNER.opam_install.$iteration.stderr.log 2>&4 || \
                 _RES=$?

@@ -97,7 +97,7 @@ let push_rec_types ~hypnaming sigma (lna,typarray) env =
   let env,ctx = Array.fold_left_map (fun e assum -> let (d,e) = push_rel sigma assum e ~hypnaming in (e,d)) env ctxt in
   Array.map get_annot ctx, env
 
-let new_evar env sigma ?src ?(naming = Namegen.IntroAnonymous) ?relevance typ =
+let new_evar env sigma ?src ?rrpat ?(naming = Namegen.IntroAnonymous) ?relevance typ =
   let (subst, _, sign) as ext = Lazy.force env.extra in
   let instance = Evarutil.default_ext_instance ext in
   let typ' = csubst_subst sigma subst typ in
@@ -106,8 +106,8 @@ let new_evar env sigma ?src ?(naming = Namegen.IntroAnonymous) ?relevance typ =
     | Some r -> r
     | None -> Retyping.relevance_of_type env.static_env sigma typ
   in
-  let typeclass_candidate = Typeclasses.is_maybe_class_type sigma typ' in
-  let (sigma, evk) = new_pure_evar ~typeclass_candidate sign sigma typ' ?src ~relevance ?name in
+  let typeclass_candidate = Typeclasses.is_maybe_class_type env.static_env sigma typ' in
+  let (sigma, evk) = new_pure_evar ~typeclass_candidate sign sigma typ' ?src ?rrpat ~relevance ?name in
   (sigma, mkEvar (evk, instance))
 
 let new_type_evar env sigma ~src =
@@ -177,6 +177,16 @@ let interp_ltac_variable ?loc typing_fun env sigma id : Evd.evar_map * unsafe_ju
   raise Not_found
 
 let interp_ltac_id env id = ltac_interp_id env.lvar id
+
+let lookup_renamed globenv id =
+  let env = renamed_env globenv in
+  (* optimization: if id is in the original named context it will
+     be the same in the extended context *)
+  match EConstr.lookup_named id env with
+  | d -> EConstr.mkVar id
+  | exception Not_found ->
+    let (_, _, sign) as ext = Lazy.force globenv.extra in
+    Evarutil.ext_rev_subst ext id
 
 type 'a obj_interp_fun =
   ?loc:Loc.t -> poly:bool -> t -> Evd.evar_map -> Evardefine.type_constraint ->

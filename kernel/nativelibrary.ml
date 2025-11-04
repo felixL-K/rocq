@@ -11,7 +11,6 @@
 open Names
 open Declarations
 open Mod_declarations
-open Mod_subst
 open Modops
 open Nativecode
 
@@ -21,8 +20,15 @@ compiler *)
 let rec translate_mod mp env mod_expr acc =
   match mod_expr with
   | NoFunctor struc ->
-      let env' = add_structure mp struc (empty_delta_resolver mp) env in
-      List.fold_left (translate_field mp env') acc struc
+    List.fold_left (translate_field mp env) acc struc
+  | MoreFunctor _ -> acc
+
+(* XXX I believe it makes no sense to extract module types *)
+and translate_modtype mp env mod_expr reso acc =
+  match mod_expr with
+  | NoFunctor struc ->
+    let env' = add_structure mp struc reso env in
+    List.fold_left (translate_field mp env') acc struc
   | MoreFunctor _ -> acc
 
 and translate_field mp env acc (l,x) =
@@ -41,7 +47,7 @@ and translate_field mp env acc (l,x) =
      compile_mind_field mp l acc mb
   | SFBrules rrb ->
      (debug_native_compiler (fun () ->
-        let msg = Printf.sprintf "Not Compiling rules %s..." (Label.to_string l) in
+        let msg = Printf.sprintf "Not Compiling rules %s..." (Id.to_string l) in
         Pp.str msg));
      compile_rewrite_rules env l acc rrb
   | SFBmodule md ->
@@ -59,13 +65,13 @@ and translate_field mp env acc (l,x) =
           Printf.sprintf "Compiling module type %s..." (ModPath.to_string mp)
         in
         Pp.str msg));
-     translate_mod mp env (mod_type mdtyp) acc
+     translate_modtype mp env (mod_type mdtyp) (mod_delta mdtyp) acc
 
+(* This function expects the contents of the module to be part of [env] already *)
 let dump_library mp env mod_expr =
   debug_native_compiler (fun () -> Pp.str "Compiling library...");
   match mod_expr with
   | NoFunctor struc ->
-      let env = add_structure mp struc (empty_delta_resolver mp) env in
       let t0 = Sys.time () in
       clear_global_tbl ();
       clear_symbols ();

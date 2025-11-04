@@ -137,8 +137,7 @@ let tactic_infer_flags with_evar = Pretyping.{
   expand_evars = true;
   program_mode = false;
   polymorphic = false;
-  undeclared_evars_patvars = false;
-  patvars_abstract = false;
+  undeclared_evars_rr = false;
   unconstrained_sorts = false;
 }
 
@@ -203,7 +202,7 @@ type eliminator =
 let is_nonrec env mind = (Environ.lookup_mind (fst mind) env).mind_finite == Declarations.BiFinite
 
 let find_ind_eliminator env sigma ind s =
-  let c = lookup_eliminator env ind s in
+  let c = Elimschemes.lookup_eliminator env ind s in
   let sigma, c = EConstr.fresh_global env sigma c in
   sigma, destConst sigma c
 
@@ -831,7 +830,7 @@ let compute_elim_sig sigma elimt =
   let preds,params = List.chop (List.length params_preds - nparams) params_preds in
 
   (* A first approximation, further analysis will tweak it *)
-  let res = ref { empty_scheme with
+  let res = { empty_scheme with
     (* This fields are ok: *)
     elimt = elimt; concl = conclusion;
     predicates = preds; npredicates = List.length preds;
@@ -840,52 +839,41 @@ let compute_elim_sig sigma elimt =
     params = params; nparams = nparams;
     (* all other fields are unsure at this point. Including these:*)
     args = args_indargs; nargs = List.length args_indargs; } in
-  try
-    (* Order of tests below is important. Each of them exits if successful. *)
-    (* 1- First see if (f x...) is in the conclusion. *)
-    if !res.farg_in_concl
-    then begin
-      res := { !res with
-        indarg = None;
-        indarg_in_concl = false; farg_in_concl = true };
-      raise_notrace Exit
-    end;
-    (* 2- If no args_indargs (=!res.nargs at this point) then no indarg *)
-    if Int.equal !res.nargs 0 then raise_notrace Exit;
-    (* 3- Look at last arg: is it the indarg? *)
-    ignore (
-      match List.hd args_indargs with
-        | LocalDef (hiname,_,hi) -> error_ind_scheme ""
-        | LocalAssum (hiname,hi) ->
-            let hi_ind, hi_args = decompose_app sigma hi in
-            let hi_is_ind = (* hi est d'un type globalisable *)
-              match EConstr.kind sigma hi_ind with
-                | Ind (mind,_)  -> true
-                | Var _ -> true
-                | Const _ -> true
-                | Construct _ -> true
-                | _ -> false in
-            let hi_args_enough = (* hi a le bon nbre d'arguments *)
-              Int.equal (Array.length hi_args) (List.length params + !res.nargs -1) in
-            (* FIXME: Ces deux tests ne sont pas suffisants. *)
-            if not (hi_is_ind && hi_args_enough) then raise_notrace Exit (* No indarg *)
-            else (* Last arg is the indarg *)
-              res := {!res with
-                indarg = Some (List.hd !res.args);
-                indarg_in_concl = occur_rel sigma 1 ccl;
-                args = List.tl !res.args; nargs = !res.nargs - 1;
-              };
-            raise_notrace Exit);
-    raise_notrace Exit(* exit anyway *)
-  with Exit -> (* Ending by computing indref: *)
-    match !res.indarg with
-      | None -> !res (* No indref *)
-      | Some (LocalDef _) -> error_ind_scheme ""
-      | Some (LocalAssum (_,ind)) ->
-          let indhd,indargs = decompose_app sigma ind in
-          try {!res with indref = Some (fst (destRef sigma indhd)) }
-          with DestKO ->
-            error CannotFindInductiveArgument
+  (* 1- First see if (f x...) is in the conclusion. *)
+  if res.farg_in_concl then res
+  (* 2- If no args_indargs (=!res.nargs at this point) then no indarg *)
+  else if Int.equal res.nargs 0 then res
+  (* 3- Look at last arg: is it the indarg? *)
+  else match List.hd args_indargs with
+  | LocalDef (hiname, _, hi) -> error_ind_scheme ""
+  | LocalAssum (hiname, hi) ->
+    let hi_ind, hi_args = decompose_app sigma hi in
+    (* has hi a globalizable type? *)
+    let hi_is_ind = match EConstr.kind sigma hi_ind with
+    | Ind _ | Var _ | Const _ | Construct _ -> true
+    | _ -> false
+    in
+    (* has hi the right number of arguments? *)
+    let hi_args_enough = Int.equal (Array.length hi_args) (List.length params + res.nargs -1) in
+    (* FIXME: these two tests are not enough *)
+    if not (hi_is_ind && hi_args_enough) then res (* No indarg *)
+    else
+      let ind, indarg, args = match res.args with
+      | [] -> failwith "hd"
+      | LocalDef _ :: _ -> error_ind_scheme ""
+      | LocalAssum (_, ind) as indarg :: args -> ind, indarg, args
+      in
+      let indhd, indargs = decompose_app sigma ind in
+      let indref = match destRef sigma indhd with
+      | (indref, _) -> indref
+      | exception DestKO -> error CannotFindInductiveArgument
+      in
+      { res with
+        indarg = Some indarg;
+        indarg_in_concl = occur_rel sigma 1 ccl;
+        args = args; nargs = res.nargs - 1;
+        indref = Some indref;
+      }
 
 let compute_scheme_signature evd scheme names_info ind_type_guess =
   let open Context.Rel.Declaration in
@@ -955,7 +943,10 @@ let compute_case_signature env mind dep names_info =
   | Prod (_,t,c) ->
     let hd, _ = Constr.decompose_app t in
     (* no recursive call in case analysis *)
-    let arg = if Constr.isRefX indref hd then RecArg else OtherArg in
+    let arg = match Constr.kind hd with
+    | Ind (ind, _) when Environ.QInd.equal env mind ind -> RecArg
+    | _ -> OtherArg
+    in
     (arg, true, not (CVars.noccurn 1 c)) :: check_branch c
   | LetIn (_,_,_,c) ->
     (OtherArg, false, not (CVars.noccurn 1 c)) :: check_branch c
@@ -986,31 +977,14 @@ let compute_case_signature env mind dep names_info =
   in
   Array.init (Array.length mip.mind_consnames) find_branches
 
-let error_cannot_recognize ind =
-  user_err
-    Pp.(str "Cannot recognize a statement based on " ++
-        Nametab.pr_global_env Id.Set.empty (IndRef ind) ++ str".")
-
 let guess_elim_shape env sigma isrec s hyp0 =
   let tmptyp0 = Typing.type_of_variable env hyp0 in
   let (mind, u), typ = Tacred.reduce_to_atomic_ind env sigma tmptyp0 in
   let is_elim = isrec && not (is_nonrec env mind) in
   let nparams =
-    if is_elim then
-      let gr = lookup_eliminator env mind s in
-      let sigma, ind = Evd.fresh_global env sigma gr in
-      let elimt = Retyping.get_type_of env sigma ind in
-      let scheme = compute_elim_sig sigma elimt in
-      let () = match scheme.indref with
-      | None -> error_cannot_recognize mind
-      | Some ref ->
-        if QGlobRef.equal env ref (IndRef mind) then ()
-        else error_cannot_recognize mind
-      in
-      scheme.nparams
-    else
-      let mib = Environ.lookup_mind (fst mind) env in
-      mib.mind_nparams
+    let mib = Environ.lookup_mind (fst mind) env in
+    if is_elim then mib.mind_nparams_rec
+    else mib.mind_nparams
   in
   let hd, args = decompose_app_list sigma typ in
   let (params, indices) = List.chop nparams args in
@@ -1139,7 +1113,6 @@ let apply_induction_in_context with_evars inhyps elim indvars names =
       sigma, false, tac, indsign
     | ElimOver (id, (mind, u)) ->
        let sigma, ind = find_ind_eliminator env sigma mind s in
-       (* FIXME: we should store this instead of recomputing it *)
        let elimt = Retyping.get_type_of env sigma (mkConstU ind) in
        let scheme = compute_elim_sig sigma elimt in
        let indsign = compute_scheme_signature sigma scheme id (mkIndU (mind, u)) in
@@ -1412,7 +1385,7 @@ let has_generic_occurrences_but_goal cls id env sigma ccl =
   (* TODO: whd_evar of goal *)
   (cls.concl_occs != NoOccurrences || not (occur_var env sigma id ccl))
 
-let induction_gen clear_flag isrec with_evars elim
+let induction_gen ~clear_flag ~isrec ~with_evars elim
     ((_pending,(c,lbind)),(eqname,names) as arg) cls =
   let inhyps = match cls with
   | Some {onhyps=Some hyps} -> List.map (fun ((_,id),_) -> id) hyps
@@ -1524,7 +1497,7 @@ let induction_destruct isrec with_evars (lc,elim) =
     | _ ->
       (* standard induction *)
       onOpenInductionArg env sigma
-      (fun clear_flag c -> induction_gen clear_flag isrec with_evars elim (c,allnames) cls) c
+      (fun clear_flag c -> induction_gen ~clear_flag ~isrec ~with_evars elim (c,allnames) cls) c
     end
   | _ ->
     Proofview.Goal.enter begin fun gl ->
@@ -1541,13 +1514,13 @@ let induction_destruct isrec with_evars (lc,elim) =
       (* TODO *)
       Tacticals.tclTHEN
         (onOpenInductionArg env sigma (fun clear_flag a ->
-          induction_gen clear_flag isrec with_evars None (a,b) cl) a)
+          induction_gen ~clear_flag ~isrec ~with_evars None (a,b) cl) a)
         (Tacticals.tclMAP (fun (a,b,cl) ->
           Proofview.Goal.enter begin fun gl ->
           let env = Proofview.Goal.env gl in
           let sigma = Tacmach.project gl in
           onOpenInductionArg env sigma (fun clear_flag a ->
-            induction_gen clear_flag false with_evars None (a,b) cl) a
+            induction_gen ~clear_flag ~isrec:false ~with_evars None (a,b) cl) a
           end) l)
     | Some elim ->
       (* Several induction hyps with induction scheme *)
@@ -1570,9 +1543,9 @@ let induction_destruct isrec with_evars (lc,elim) =
     end
 
 let induction ev clr c l e =
-  induction_gen clr true ev e
+  induction_gen ~clear_flag:clr ~isrec:true ~with_evars:ev e
     ((None,(c,NoBindings)),(None,l)) None
 
 let destruct ev clr c l e =
-  induction_gen clr false ev e
+  induction_gen ~clear_flag:clr ~isrec:false ~with_evars:ev e
     ((None,(c,NoBindings)),(None,l)) None

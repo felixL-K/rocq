@@ -107,7 +107,7 @@ let check_parameters_must_be_named = function
   | CLocalAssum (ls, _, bk, _ce) ->
     List.iter (error_parameters_must_be_named bk) ls
   | CLocalPattern {CAst.loc} ->
-    Loc.raise ?loc (Gramlib.Grammar.Error "pattern with quote not allowed in record parameters")
+    Loc.raise ?loc (Gramlib.Grammar.ParseError "pattern with quote not allowed in record parameters")
 
 (** [DataI.t] contains the information used in record interpretation,
    it is a strict subset of [Ast.t] thus this should be
@@ -126,12 +126,18 @@ module DataI = struct
 end
 
 module Data = struct
+  (* XXX move coercion_flags to ComCoercion? *)
+  type coercion_flags = {
+    coe_local : bool;
+    coe_reversible : bool;
+  }
+  type instance_flags = {
+    inst_locality : Hints.hint_locality;
+    inst_priority : int option;
+  }
   type projection_flags = {
-    pf_coercion: bool;
-    pf_reversible: bool;
-    pf_instance: bool;
-    pf_priority: int option;
-    pf_locality: Goptions.option_locality;
+    pf_coercion: coercion_flags option;
+    pf_instance: instance_flags option;
     pf_canonical: bool;
   }
   type t =
@@ -259,6 +265,10 @@ let finalize_def_class env sigma ~params ~sort ~projtyp =
   (* no need to check evars in typ which is guaranteed to be a sort  *)
   let () = Context.Rel.iter ce params in
   let () = ce projtyp in
+  let () =
+    if not (Vars.closedn (List.length params) projtyp) then
+      CErrors.user_err Pp.(str "Definitional classes cannot be recursive.")
+  in
   sigma, params, sort, typ, projtyp
 
 let adjust_field_implicits ~isclass (params,param_impls) (impls:Impargs.manual_implicits) =
@@ -473,7 +483,9 @@ let warning_or_error ?loc ~info flags indsp err =
              Himsg.explain_type_error env (Evd.from_env env)
                (Pretype_errors.of_type_error te))
   in
-  if flags.Data.pf_coercion || flags.Data.pf_instance then user_err ?loc ~info st;
+  (* XXX flags.pf_canonical? *)
+  if Option.has_some flags.Data.pf_coercion || Option.has_some flags.Data.pf_instance then
+    user_err ?loc ~info st;
   warn_cannot_define_projection ?loc (hov 0 st)
 
 type field_status =
@@ -523,22 +535,21 @@ let instantiate_possibly_recursive_type ind u ntypes paramdecls fields =
 (** Declare projection [ref] over [from] a coercion
    or a typeclass instance according to [flags]. *)
 let declare_proj_coercion_instance ~flags ref from =
-  if flags.Data.pf_coercion then begin
-    let cl = ComCoercion.class_of_global from in
-    let local = flags.Data.pf_locality = Goptions.OptLocal in
-    ComCoercion.try_add_new_coercion_with_source ref ~local ~reversible:flags.Data.pf_reversible ~source:cl
-  end;
-  if flags.Data.pf_instance then begin
-    let env = Global.env () in
-    let sigma = Evd.from_env env in
-    let info = Typeclasses.{ hint_priority = flags.Data.pf_priority; hint_pattern = None } in
-    let local =
-      match flags.Data.pf_locality with
-      | Goptions.OptLocal -> Hints.Local
-      | Goptions.(OptDefault | OptExport) -> Hints.Export
-      | Goptions.OptGlobal -> Hints.SuperGlobal in
-    Classes.declare_instance ~warn:true env sigma (Some info) local ref
-  end
+  let () = match flags.Data.pf_coercion with
+    | None -> ()
+    | Some { coe_local=local; coe_reversible=reversible } ->
+      let cl = ComCoercion.class_of_global from in
+      ComCoercion.try_add_new_coercion_with_source ref ~local ~reversible ~source:cl
+  in
+  let () = match flags.Data.pf_instance with
+    | None -> ()
+    | Some { inst_locality; inst_priority } ->
+      let env = Global.env () in
+      let sigma = Evd.from_env env in
+      let info = Typeclasses.{ hint_priority = inst_priority; hint_pattern = None } in
+      Classes.declare_instance ~warn:true env sigma (Some info) inst_locality ref
+  in
+  ()
 
 (* TODO: refactor the declaration part here; this requires some
    surgery as Evarutil.finalize is called too early in the path *)
@@ -557,7 +568,7 @@ let build_named_proj ~primitive ~flags ~univs ~uinstance ~kind env paramdecls
       (* [ccl'] is defined in context [params;x:rp;x:rp] *)
       if primitive then
         let p = Projection.Repr.make indsp
-            ~proj_npars:mib.mind_nparams ~proj_arg:i (Label.of_id fid) in
+            ~proj_npars:mib.mind_nparams ~proj_arg:i fid in
         mkProj (Projection.make p false, rci, mkRel 1), Some (p,rci)
       else
         let ccl' = liftn 1 2 ccl in
@@ -645,10 +656,10 @@ let declare_projections indsp ~kind ~inhabitant_id flags ?fieldlocs fieldimpls =
   let rp = applist (r, Context.Rel.instance_list mkRel 0 paramdecls) in
   let paramargs = Context.Rel.instance_list mkRel 1 paramdecls in (*def in [[params;x:rp]]*)
   let x = make_annot (Name inhabitant_id) (Inductive.relevance_of_ind_body mip uinstance) in
-  let fields = instantiate_possibly_recursive_type (fst indsp) uinstance mib.mind_ntypes paramdecls fields in
+  let fields = instantiate_possibly_recursive_type (fst indsp) uinstance (Declareops.mind_ntypes mib) paramdecls fields in
   let lifted_fields = Vars.lift_rel_context 1 fields in
   let primitive =
-    match mib.mind_record with
+    match mip.mind_record with
     | PrimRecord _ -> true
     | FakeRecord | NotRecord -> false
   in
@@ -718,25 +729,25 @@ module Ast = struct
     { name : Names.lident
     ; is_coercion : coercion_flag
     ; binders: local_binder_expr list
-    ; cfs : (local_decl_expr * record_field_attr) list
+    ; cfs : (local_decl_expr * Data.projection_flags * notation_declaration list) list
     ; idbuild : lident
     ; sort : constr_expr option
     ; default_inhabitant_id : Id.t option
     }
 
   let to_datai { name; idbuild; cfs; sort; default_inhabitant_id; } =
-    let fs = List.map fst cfs in
+    let fs = List.map pi1 cfs in
     { DataI.name = name
     ; constructor_name = idbuild.CAst.v
     ; arity = sort
-    ; nots = List.map (fun (_, { rf_notation }) -> List.map Metasyntax.prepare_where_notation rf_notation) cfs
+    ; nots = List.map (fun (_, _, rf_notation) -> List.map Metasyntax.prepare_where_notation rf_notation) cfs
     ; fs
     ; default_inhabitant_id
     }
 end
 
 let check_unique_names ~def records =
-  let extract_name acc (rf_decl, _) = match rf_decl with
+  let extract_name acc (rf_decl, _, _) = match rf_decl with
       Vernacexpr.AssumExpr({CAst.v=Name id},_,_) -> id::acc
     | Vernacexpr.DefExpr ({CAst.v=Name id},_,_,_) -> id::acc
     | _ -> acc in
@@ -763,47 +774,10 @@ let kind_class =
   function Class true -> DefClass | Class false -> RecordClass
   | Inductive_kw | CoInductive | Variant | Record | Structure -> NotClass
 
-let check_priorities kind records =
-  let open Vernacexpr in
-  let isnot_class = kind_class kind <> RecordClass in
-  let has_priority { Ast.cfs; _ } =
-    List.exists (fun (_, { rf_priority }) -> not (Option.is_empty rf_priority)) cfs
-  in
-  if isnot_class && List.exists has_priority records then
-    user_err Pp.(str "Priorities only allowed for type class substructures.")
-
-let check_proj_flags kind rf =
-  let open Vernacexpr in
-  let pf_coercion, pf_reversible =
-    match rf.rf_coercion with
-    | AddCoercion -> true, Option.default true rf.rf_reversible
-    | NoCoercion ->
-       if rf.rf_reversible <> None then
-         Attributes.(unsupported_attributes
-           [CAst.make ("reversible (without :>)",VernacFlagEmpty)]);
-       false, false in
-  let pf_instance =
-    match rf.rf_instance with NoInstance -> false | BackInstance -> true in
-  let pf_priority = rf.rf_priority in
-  let pf_locality =
-    begin match rf.rf_coercion, rf.rf_instance with
-    | NoCoercion, NoInstance ->
-       if rf.rf_locality <> Goptions.OptDefault then
-         Attributes.(unsupported_attributes
-           [CAst.make ("locality (without :> or ::)",VernacFlagEmpty)])
-    | AddCoercion, NoInstance ->
-       if rf.rf_locality = Goptions.OptExport then
-         Attributes.(unsupported_attributes
-           [CAst.make ("export (without ::)",VernacFlagEmpty)])
-    | _ -> ()
-    end; rf.rf_locality in
-  let pf_canonical = rf.rf_canonical in
-  Data.{ pf_coercion; pf_reversible; pf_instance; pf_priority; pf_locality; pf_canonical }
-
-let extract_record_data kind records =
+let extract_record_data records =
   let data = List.map Ast.to_datai records in
   let decl_data = List.map (fun { Ast.is_coercion; cfs } ->
-      let proj_flags = List.map (fun (_,rf) -> check_proj_flags kind rf) cfs in
+      let proj_flags = List.map (fun (_,rf,_) -> rf) cfs in
       { Data.is_coercion; proj_flags })
       records
   in
@@ -823,8 +797,7 @@ let extract_record_data kind records =
 let pre_process_structure udecl kind ~flags ~primitive_proj (records : Ast.t list) =
   let def = (kind = Vernacexpr.Class true) in
   let indlocs = check_unique_names ~def records in
-  let () = check_priorities kind records in
-  let ps, interp_data, decl_data = extract_record_data kind records in
+  let ps, interp_data, decl_data = extract_record_data records in
   let entry =
     (* In theory we should be able to use
        [Notation.with_notation_protection], due to the call to
@@ -982,7 +955,7 @@ let declare_class ?mode declared =
         | Undef _ | OpaqueDef _ | Primitive _ | Symbol _ -> assert false
       in
       let params, field = Term.decompose_lambda_decls class_body in
-      let fname = Name (Label.to_id @@ Constant.label proj_kn) in
+      let fname = Name (Constant.label proj_kn) in
       let frelevance = proj_cb.const_relevance in
       let fields = [ RelDecl.LocalAssum ({binder_name=fname; binder_relevance=frelevance}, field) ] in
       let proj = {
@@ -1001,7 +974,7 @@ let declare_class ?mode declared =
         meth_const = kn;
       }
       in
-      let projs = List.map2 make_proj (List.rev fields) (Structure.find_projections (mind,0)) in
+      let projs = List.map2 make_proj (List.rev fields) (Structure.find_projections env (mind,0)) in
       GlobRef.IndRef (mind, 0), univs, mib.mind_params_ctxt, fields, projs
   in
   let k = {
@@ -1046,7 +1019,7 @@ let add_inductive_class ind =
   let ctx = oneind.mind_arity_ctxt in
   let univs = Declareops.inductive_polymorphic_context mind in
   let props, projs =
-    match Structure.find ind with
+    match Structure.find env ind with
     | exception Not_found ->
       let r = oneind.mind_relevance in
       let args = Context.Rel.instance mkRel 0 ctx in
@@ -1078,7 +1051,7 @@ let warn_already_existing_class =
       Printer.pr_global g ++ str " is already declared as a typeclass.")
 
 let declare_existing_class g =
-  if Typeclasses.is_class g then warn_already_existing_class g
+  if Typeclasses.is_class (Global.env ()) g then warn_already_existing_class g
   else
     match g with
     | GlobRef.ConstRef x -> add_constant_class x
@@ -1107,14 +1080,6 @@ let definition_structure ~flags udecl kind ~primitive_proj (records : Ast.t list
   inds
 
 module Internal = struct
-  type nonrec projection_flags = Data.projection_flags = {
-    pf_coercion: bool;
-    pf_reversible: bool;
-    pf_instance: bool;
-    pf_priority: int option;
-    pf_locality: Goptions.option_locality;
-    pf_canonical: bool;
-  }
   let declare_projections = declare_projections
   let declare_structure_entry = declare_structure_entry
 end

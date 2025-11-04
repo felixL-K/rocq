@@ -185,7 +185,10 @@ let v_level = v_tuple "level" [|v_int;v_raw_level|]
 let v_expr = v_tuple "levelexpr" [|v_level;v_int|]
 let v_univ = v_list v_expr
 
-let v_qvar = v_sum "qvar" 0 [|[|v_int|];[|v_string;v_int|]|]
+let v_qglobal = v_pair v_dp v_id
+
+(* perhaps the "Unif" constructor should be forbidden in vo files *)
+let v_qvar = v_sum "qvar" 0 [|[|v_int|];[|v_string;v_int|];[|v_qglobal|]|]
 
 let v_constant_quality = v_enum "constant_quality" 3
 
@@ -421,11 +424,16 @@ let v_wfp =
 
 let v_squash_info = v_sum "squash_info" 1 [|[|v_set v_quality|]|]
 
+let v_record_info =
+  v_sum "record_info" 2
+    [| [| v_tuple "record" [| v_id; v_array v_id; v_array v_relevance; v_array v_constr |] |] |]
+
 let v_one_ind = v_tuple "one_inductive_body"
   [|v_id;
     v_rctxt;
     v_sort;
     v_constr;
+    v_record_info;
     v_array v_id;
     v_array v_constr;
     v_int;
@@ -442,15 +450,9 @@ let v_one_ind = v_tuple "one_inductive_body"
 
 let v_finite = v_enum "recursivity_kind" 3
 
-let v_record_info =
-  v_sum "record_info" 2
-    [| [| v_array (v_tuple "record" [| v_id; v_array v_id; v_array v_relevance; v_array v_constr |]) |] |]
-
 let v_ind_pack = v_tuple "mutual_inductive_body"
   [|v_array v_one_ind;
-    v_record_info;
     v_finite;
-    v_int;
     v_section_ctxt;
     v_instance;
     v_int;
@@ -494,23 +496,23 @@ let [_v_hpattern;v_elimination;_v_head_elim;_v_patarg] : _ Vector.t =
   mfix [();();();()] (fun [v_hpattern;v_elimination;v_head_elim;v_patarg] ->
   let v_hpattern =
     v_sum_c ("head_pattern", 0,
-         [|[|v_int|];                      (* PHRel *)
-           [|v_sort_pattern|];           (* PHSort *)
-           [|v_cst; v_instance_mask|];   (* PHSymbol *)
-           [|v_ind; v_instance_mask|];   (* PHInd *)
-           [|v_cons; v_instance_mask|];  (* PHConstr *)
-           [|v_uint63|];                 (* PHv_int *)
-           [|v_float64|];                  (* PHFloat *)
-           [|v_string|];                   (* PHv_string *)
-           [|v_array v_patarg; v_patarg|]; (* PHLambda *)
-           [|v_array v_patarg; v_patarg|]; (* PHProd *)
+         [|[|v_int|];                         (* PHRel *)
+           [|v_sort_pattern|];                (* PHSort *)
+           [|v_cst; v_instance_mask|];        (* PHSymbol *)
+           [|v_ind; v_instance_mask|];        (* PHInd *)
+           [|v_cons; v_instance_mask|];       (* PHConstr *)
+           [|v_uint63|];                      (* PHInt *)
+           [|v_float64|];                     (* PHFloat *)
+           [|v_string|];                      (* PHString *)
+           [|v_array v_patarg; v_head_elim|]; (* PHLambda *)
+           [|v_array v_patarg; v_patarg|];    (* PHProd *)
          |])
 
   and v_elimination =
     v_sum_c ("pattern_elimination", 0,
-         [|[|v_array v_patarg|];                                   (* PEApp *)
-           [|v_ind; v_instance_mask; v_patarg; v_array v_patarg|]; (* PECase *)
-           [|v_proj|];                                           (* PEProj *)
+         [|[|v_array v_patarg|];                    (* PEApp *)
+           [|v_ind; v_patarg; v_array v_patarg|];   (* PECase *)
+           [|v_proj_repr|];                         (* PEProj *)
          |])
 
   and v_head_elim = v_tuple_c ("head*elims", [|v_hpattern; v_list v_elimination|])
@@ -518,7 +520,7 @@ let [_v_hpattern;v_elimination;_v_head_elim;_v_patarg] : _ Vector.t =
   and v_patarg =
     v_sum_c ("pattern_argument", 1,
          [|[|v_int|];         (* EHole *)
-           [|v_head_elim|]; (* ERigid *)
+           [|v_head_elim|];   (* ERigid *)
          |])
   in
   [v_hpattern;v_elimination;v_head_elim;v_patarg])
@@ -564,7 +566,7 @@ let [_v_sfb;_v_struc;_v_sign;_v_mexpr;_v_impl;v_module;_v_modtype] : _ Vector.t 
   and v_impl =
     v_sum_c ("module_impl",2, (* Abstract, FullStruct *)
          [|[|v_mexpr|];  (* Algebraic *)
-           [|v_struc|]|])  (* Struct *)
+           [|v_resolver; v_struc|]|])  (* Struct *)
   and v_module =
     v_tuple_c ("module_body",
            [|v_sum_c ("when_mod_body", 0, [|[|v_impl|]|]);v_sign;v_opt v_mexpr;v_resolver;v_retroknowledge|])
@@ -580,7 +582,7 @@ let v_vodigest = v_sum_c ("module_impl",0, [| [|v_string|]; [|v_string;v_string|
 let v_deps = v_array (v_tuple "dep" [|v_dp;v_vodigest|])
 let v_flags = v_tuple "flags" [|v_bool|] (* Allow Rewrite Rules *)
 let v_compiled_lib =
-  v_tuple "compiled" [|v_dp;v_module;v_context_set;v_set v_qvar;v_deps; v_flags|]
+  v_tuple "compiled" [|v_dp;v_module;v_pair (v_set v_qvar) v_context_set;v_deps; v_flags|]
 
 (** Toplevel structures in a vo (see Cic.mli) *)
 

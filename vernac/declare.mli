@@ -251,19 +251,20 @@ module Proof : sig
   (** Admit a proof *)
   val save_admitted : pm:OblState.t -> proof:t -> OblState.t
 
-  (** [by tac] applies tactic [tac] to the 1st subgoal of the current
+  (** [by env tac] applies tactic [tac] to the 1st subgoal of the current
       focused proof.
       Returns [false] if an unsafe tactic has been used. *)
-  val by : unit Proofview.tactic -> t -> t * bool
+  val by : Environ.env -> unit Proofview.tactic -> t -> t * bool
 
   (** Operations on ongoing proofs *)
+  type proof = Proof.t
   val get : t -> Proof.t
   val get_name : t -> Names.Id.t
 
   val fold : f:(Proof.t -> 'a) -> t -> 'a
   val map : f:(Proof.t -> Proof.t) -> t -> t
   val map_fold : f:(Proof.t -> Proof.t * 'a) -> t -> t * 'a
-  val map_fold_endline : f:(unit Proofview.tactic -> Proof.t -> Proof.t * 'a) -> t -> t * 'a
+  val map_fold_endline : f:(Gentactic.glob_generic_tactic option -> Proof.t -> Proof.t * 'a) -> t -> t * 'a
 
   (** Sets the tactic to be used when a tactic line is closed with [...] *)
   val set_endline_tactic : Gentactic.glob_generic_tactic -> t -> t
@@ -656,5 +657,7 @@ module Internal : sig
     one may need to declare them by hand, for example because the
     tactic was run as part of a command *)
   val export_side_effects : Evd.side_effects -> unit
+
+  val register_side_effects : Proof.proof -> Proof.proof
 
 end

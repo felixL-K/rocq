@@ -31,7 +31,7 @@ let general_elim_using mk_elim (ind, u, args) id = match mk_elim with
     let sigma = Proofview.Goal.sigma gl in
     let sort = Retyping.get_sort_quality_of env sigma (Proofview.Goal.concl gl) in
     let flags = Unification.elim_flags () in
-    let gr = Indrec.lookup_eliminator env ind sort in
+    let gr = Elimschemes.lookup_eliminator env ind sort in
     let sigma, elim = Evd.fresh_global env sigma gr in
     let elimt = Retyping.get_type_of env sigma elim in
     (* applying elimination_scheme just a little modified *)
@@ -98,9 +98,9 @@ let rec general_decompose_aux recognizer id =
   let ((ind, u), t) = pf_apply Tacred.reduce_to_atomic_ind gl (pf_get_type_of gl (mkVar id)) in
   let _, args = decompose_app (Proofview.Goal.sigma gl) t in
   let rec_flag, mkelim =
-    match (Environ.lookup_mind (fst ind) env).mind_record with
+    match (Environ.lookup_mind (fst ind) env).mind_packets.(snd ind).mind_record with
     | NotRecord -> true, Elim
-    | FakeRecord | PrimRecord _ -> false, Case true
+    | FakeRecord | PrimRecord _ -> false, Case false
   in
   let branchsigns = Tacticals.compute_constructor_signatures env ~rec_flag (ind, u) in
   let next_tac bas =

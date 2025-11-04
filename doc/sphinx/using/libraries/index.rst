@@ -10,7 +10,7 @@ plugins can add new tactics and commands written in OCaml.
 
 The Rocq Prover is distributed with a standard library and a set of internal
 plugins (most of which provide tactics that have already been
-presented in :ref:`writing-proofs`).  This chapter presents this
+presented in :ref:`tactics`).  This chapter presents this
 standard library and some of these internal plugins which provide
 features that are not tactics.
 
@@ -35,7 +35,7 @@ to consider:
   scripts that load plugins.  (`rocqchk` doesn't load plugins, so they won't be
   part of trusted code base.)
 - Plugins that aren't in Rocq's
-  `CI (continuous integration) system <https://github.com/coq/coq/blob/master/dev/ci/README-users.md>`_
+  `CI (continuous integration) system <https://github.com/rocq-prover/rocq/blob/master/dev/ci/README-users.md>`_
   are more likely
   to break across major versions due to source code changes to Rocq.  You may want to
   consider this before adopting a new plugin for your project.

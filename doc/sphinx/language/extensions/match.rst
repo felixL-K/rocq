@@ -207,7 +207,7 @@ Factorization of clauses with same right-hand side
 
    When several patterns share the same right-hand side, it is additionally
    possible to share the clauses using disjunctive patterns. Assuming that the
-   printing matching mode is on, this :term:`flag` (on by default) tells Rocq's
+   :flag:`Printing Matching` mode is on, this :term:`flag` (on by default) tells Rocq's
    printer to try to do this kind of factorization.
 
 Use of a default clause
@@ -252,7 +252,7 @@ Printing of hidden subterms
    In order to be able to cheaply reconstruct the types of the
    variables bound by `in` and `as`, `match` terms contain the
    polymorphic universe instance and the parameters of the inductive
-   which is being matched. When this flag is on (it is off by
+   which is being matched. When this :term:`flag` is on (it is off by
    default), this information is displayed as a :term:`volatile cast` around
    the match discriminee.
 
@@ -446,6 +446,8 @@ does not build a match expression.
                        | y => y
                        end).
 
+
+.. _aliasing-subpatterns:
 
 Aliasing subpatterns
 --------------------

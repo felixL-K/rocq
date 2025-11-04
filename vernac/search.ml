@@ -83,7 +83,7 @@ let generic_search env sigma (fn : GlobRef.t -> Decls.logical_kind option -> env
     | AtomicObject o ->
       let handler =
         DynHandle.add Declare.Internal.Constant.tag begin fun (id,obj) ->
-          let kn = KerName.make prefix.obj_mp (Label.of_id id) in
+          let kn = KerName.make prefix.obj_mp id in
           let cst = Global.constant_of_delta_kn kn in
           let gr = GlobRef.ConstRef cst in
           let (typ, _) = Typeops.type_of_global_in_context (Global.env ()) gr in
@@ -91,7 +91,7 @@ let generic_search env sigma (fn : GlobRef.t -> Decls.logical_kind option -> env
           fn gr (Some kind) env sigma typ
         end @@
         DynHandle.add DeclareInd.Internal.objInductive begin fun (id,_) ->
-          let kn = KerName.make prefix.obj_mp (Label.of_id id) in
+          let kn = KerName.make prefix.obj_mp id in
           let mind = Global.mind_of_delta_kn kn in
           let mib = Global.lookup_mind mind in
           let iter_packet i mip =
@@ -126,8 +126,6 @@ module ConstrPriority = struct
   type t = GlobRef.t * Decls.logical_kind option * Environ.env * Evd.evar_map * Constr.t * priority
   and priority = int
 
-  module ConstrSet = CSet.Make(Constr)
-
   (** A measure of the size of a term *)
   let rec size t =
     Constr.fold (fun s t -> 1 + s + size t) 0 t
@@ -137,13 +135,13 @@ module ConstrPriority = struct
   let rec symbols acc t =
     let open Constr in
     match kind t with
-    | Const _ | Ind _ | Construct _ -> ConstrSet.add t acc
+    | Const _ | Ind _ | Construct _ -> GlobRef.Set_env.add (fst @@ destRef t) acc
     | _ -> Constr.fold symbols acc t
 
   (** The number of distinct "symbols" (see {!symbols}) which appear
       in a term. *)
   let num_symbols t =
-    ConstrSet.(cardinal (symbols empty t))
+    GlobRef.Set_env.(cardinal (symbols empty t))
 
   let priority gref t : priority =
     -(3*(num_symbols t) + size t)

@@ -38,7 +38,7 @@ let is_modular = function
 let split_struc k m struc =
   let rec split rev_before = function
     | [] -> raise Not_found
-    | (k',b)::after when Label.equal k k' && (is_modular b) == (m : bool) ->
+    | (k',b)::after when Id.equal k k' && (is_modular b) == (m : bool) ->
       List.rev rev_before,b,after
     | h::tail -> split (h::rev_before) tail
   in split [] struc
@@ -50,7 +50,7 @@ let discr_resolver mp mtb = match mod_type mtb with
 let rec rebuild_mp mp l =
   match l with
   | []-> mp
-  | i::r -> rebuild_mp (MPdot(mp,Label.of_id i)) r
+  | i::r -> rebuild_mp (MPdot(mp,i)) r
 
 let infer_gen_conv state env c1 c2 =
   Conversion.generic_conv Conversion.CONV ~l2r:false TransparentState.full env state c1 c2
@@ -67,7 +67,7 @@ type with_body = {
 let rec check_with_def (cst, ustate) env struc (idl, wth) mp reso =
   let lab,idl = match idl with
     | [] -> assert false
-    | id::idl -> Label.of_id id, idl
+    | id::idl -> id, idl
   in
   try
     let modular = not (List.is_empty idl) in
@@ -158,7 +158,7 @@ let rec check_with_def (cst, ustate) env struc (idl, wth) mp reso =
 let rec check_with_mod (cst, ustate) env struc (idl,new_mp) mp reso =
   let lab,idl = match idl with
     | [] -> assert false
-    | id::idl -> Label.of_id id, idl
+    | id::idl -> id, idl
   in
   try
     let before,spec,after = split_struc lab true struc in
@@ -170,11 +170,10 @@ let rec check_with_mod (cst, ustate) env struc (idl,new_mp) mp reso =
     if List.is_empty idl then
       (* Toplevel module definition *)
       let new_mb = lookup_module new_mp env in
-      let new_mtb = module_type_of_module new_mb in
       let cst = match Mod_declarations.mod_expr old with
         | Abstract ->
           let mtb_old = module_type_of_module old in
-          let cst = Subtyping.check_subtypes (cst, ustate) env' new_mp new_mtb (MPdot (mp, lab)) mtb_old in
+          let cst = Subtyping.check_subtypes (cst, ustate) env' new_mp (MPdot (mp, lab)) mtb_old in
           cst
         | Algebraic (MENoFunctor (MEident(mp'))) ->
           check_modpath_equiv env' new_mp mp';
@@ -250,9 +249,8 @@ let rec translate_apply ustate env inl mp subst (sign, reso, cst) args = match a
     if is_empty_subst subst then farg_b
     else subst_modtype subst_codom subst (MPbound farg_id) farg_b
   in
-  let mtb = module_type_of_module (lookup_module mp1 env) in
-  let cst = Subtyping.check_subtypes (cst, ustate) env mp1 mtb (MPbound farg_id) farg_b in
-  let mp_delta = discr_resolver mp1 mtb in
+  let cst = Subtyping.check_subtypes (cst, ustate) env mp1 (MPbound farg_id) farg_b in
+  let mp_delta = discr_resolver mp1 (lookup_module mp1 env) in
   let mp_delta = inline_delta_resolver env inl mp1 farg_id farg_b mp_delta in
   let nsubst = map_mbid farg_id mp1 mp_delta in
   let subst = join subst nsubst in
@@ -324,8 +322,12 @@ let finalize_module_alg (cst, ustate) (vm, vmstate) env mp (sign,alg,reso) resty
     mb, cst, vm
   | Some (params_mte,inl) ->
     let res_mtb, cst, vm = translate_modtype (cst, ustate) (vm, vmstate) env mp inl params_mte in
-    let auto_mtb = mk_modtype sign reso in
-    let cst = Subtyping.check_subtypes (cst, ustate) env mp auto_mtb mp res_mtb in
+    let auto_mtb = Mod_declarations.make_module_body sign reso [] in
+    (* This function is supposed to be called in a state where the current module
+       is about to be closed, so all subcomponents of the module are already
+       part of the environment. We only need to add the toplevel module entry. *)
+    let env = Environ.shallow_add_module mp auto_mtb env in
+    let cst = Subtyping.check_subtypes (cst, ustate) env mp mp res_mtb in
     let impl = match alg with
     | Some e -> Algebraic e
     | None ->
@@ -333,7 +335,7 @@ let finalize_module_alg (cst, ustate) (vm, vmstate) env mp (sign,alg,reso) resty
       | NoFunctor s -> s
       | MoreFunctor _ -> assert false (* All non-algebraic callers enforce this *)
       in
-      Struct sign
+      Struct (reso,sign)
     in
     let mb = module_body_of_type res_mtb in
     let mb = set_implementation impl mb in
@@ -352,6 +354,11 @@ let translate_module (cst, ustate) (vm, vmstate) env mp inl = function
   | MExpr (params,mse,oty) ->
     let (sg,alg,reso,cst,vm) = translate_mse_funct (cst, ustate) (vm, vmstate) env ~is_mod:true mp inl mse params in
     let restype = Option.map (fun ty -> ((params,ty),inl)) oty in
+    (* finalize_module_alg expects the subcomponents to be part of the environment *)
+    let env = match sg with
+    | NoFunctor struc -> Modops.add_structure mp struc reso env
+    | MoreFunctor _ -> env
+    in
     finalize_module_alg (cst, ustate) (vm, vmstate) env mp (sg,Some alg,reso) restype
 
 (** We now forbid any Include of functors with restricted signatures.

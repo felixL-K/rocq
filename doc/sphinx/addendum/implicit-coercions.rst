@@ -110,7 +110,7 @@ If there's another class :g:`D` with a coercion from :g:`C` to :g:`D` and
 incoming coercions from :g:`A` and :g:`B`, Rocq tries :g:`C` before :g:`D`.
 This ordering is well defined only if the coercion graph happens to be a semi
 lattice.  The intuition behind this ordering is that since coercions forget
-information, :g:`D` has less information that :g:`C`, and hence
+information, :g:`D` has less information than :g:`C`, and hence
 inferring :g:`?x : B` from :g:`h a : D` would be harder.
 
 See the :ref:`example below <example-reversible-coercion>`.
@@ -151,7 +151,7 @@ Coercion Classes
   The first form declares the construction denoted by :token:`reference` as a coercion between
   the two given classes.  The second form defines :token:`ident_decl`
   just like :cmd:`Definition` :n:`@ident_decl @def_body`
-  and then declares :token:`ident_decl` as a coercion between it source and its target.
+  and then declares :token:`ident_decl` as a coercion between its source and its target.
   Both forms support the :attr:`local` attribute, which makes the coercion local to the current section.
 
   :n:`{? : @coercion_class >-> @coercion_class }`

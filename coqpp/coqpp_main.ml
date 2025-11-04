@@ -252,7 +252,7 @@ function
 | "IDENT", s -> fprintf fmt "Tok.PIDENT (%a)" print_pat s
 | "FIELD", s -> fprintf fmt "Tok.PFIELD (%a)" print_pat s
 | "NUMBER", None -> fprintf fmt "Tok.PNUMBER None"
-| "NUMBER", Some s -> fprintf fmt "Tok.PNUMBER (Some (NumTok.Unsigned.of_string %a))" print_string s
+| "NUMBER", Some s -> fprintf fmt "Tok.PNUMBER (Some (Option.get (NumTok.Unsigned.parse_string %a)))" print_string s
 | "STRING", s -> fprintf fmt "Tok.PSTRING (%a)" print_pat s
 | "LEFTQMARK", None -> fprintf fmt "Tok.PLEFTQMARK"
 | "BULLET", s -> fprintf fmt "Tok.PBULLET (%a)" print_pat s
@@ -289,11 +289,11 @@ and print_symbol fmt tkn = match tkn with
 | SymbList0 (s, None) ->
   fprintf fmt "(Procq.Symbol.list0 %a)" print_symbol s
 | SymbList0 (s, Some sep) ->
-  fprintf fmt "(Procq.Symbol.list0sep (%a) (%a) false)" print_symbol s print_anonymized_symbol sep
+  fprintf fmt "(Procq.Symbol.list0sep (%a) (%a))" print_symbol s print_anonymized_symbol sep
 | SymbList1 (s, None) ->
   fprintf fmt "(Procq.Symbol.list1 (%a))" print_symbol s
 | SymbList1 (s, Some sep) ->
-  fprintf fmt "(Procq.Symbol.list1sep (%a) (%a) false)" print_symbol s print_anonymized_symbol sep
+  fprintf fmt "(Procq.Symbol.list1sep (%a) (%a))" print_symbol s print_anonymized_symbol sep
 | SymbOpt s ->
   fprintf fmt "(Procq.Symbol.opt %a)" print_symbol s
 | SymbRules rules ->
@@ -369,9 +369,9 @@ let print_rule_classifier fmt r = match r.vernac_class with
 | Some f ->
   let no_binder = function ExtTerminal _ -> true | ExtNonTerminal _ -> false in
   if List.for_all no_binder r.vernac_toks then
-    fprintf fmt "Some @[%a@]" print_code f
+    fprintf fmt "Some @[(fun ~atts -> %a)@]" print_code f
   else
-    fprintf fmt "Some @[(fun %a-> %a)@]" print_binders r.vernac_toks print_code f
+    fprintf fmt "Some @[(fun %a ~atts -> %a)@]" print_binders r.vernac_toks print_code f
 
 (* let print_atts fmt = function *)
 (*   | None -> fprintf fmt "@[let () = Attributes.unsupported_attributes atts in@] " *)
@@ -477,13 +477,16 @@ let print_rules state fmt rules =
   print_list fmt (fun fmt r -> fprintf fmt "(%a)" (print_rule state) r) rules
 
 let print_classifier fmt = function
+(* error could be interesting but would need to check that not all of the rules have a classifier,
+   if we do that we could also check that at least 1 rule has no classifier
+   when the block level classifier is specified *)
 | ClassifDefault -> fprintf fmt ""
 | ClassifName "QUERY" ->
-  fprintf fmt "~classifier:(fun _ -> Vernacextend.classify_as_query)"
+  fprintf fmt "~classifier:(fun ~atts:_ _ -> Vernacextend.classify_as_query)"
 | ClassifName "SIDEFF" ->
-  fprintf fmt "~classifier:(fun _ -> Vernacextend.classify_as_sideeff)"
+  fprintf fmt "~classifier:(fun ~atts:_ _ -> Vernacextend.classify_as_sideeff)"
 | ClassifName s -> fatal (Printf.sprintf "Unknown classifier %s" s)
-| ClassifCode c -> fprintf fmt "~classifier:(%s)" c.code
+| ClassifCode c -> fprintf fmt "~classifier:(fun ~atts -> %s)" c.code
 
 let print_entry fmt = function
 | None -> fprintf fmt "None"
@@ -592,7 +595,7 @@ let print_rules fmt (name, rules) =
        form [ entry(x) ] -> [ x ] so as not to generate a proxy entry and
        reuse the same entry directly. *)
     fprintf fmt "@[Vernacextend.Arg_alias@ @[<2>(%s)@]@]" e
-  | _ -> fprintf fmt "@[Vernacextend.Arg_rules@ @[<2>(%a)@]@]" pr rules
+  | _ -> fprintf fmt "@[Vernacextend.Arg_rules@ %a@]" pr rules
 
 let print_printer fmt = function
 | None -> fprintf fmt "@[fun _ -> Pp.str \"missing printer\"@]"
@@ -686,26 +689,25 @@ let print_ast fmt arg =
   | None -> default_printer
   in
   let pr fmt () =
-    fprintf fmt "Tacentries.argument_extend ~plugin:\"%s\" ~name:%a @[{@\n\
-      Tacentries.arg_parsing = %a;@\n\
+    fprintf fmt "Tacentries.argument_extend ~plugin:\"%s\" ~name:%a@ @[{@\n\
+      Tacentries.arg_parsing =@ %a;@\n\
       Tacentries.arg_tag = @[%a@];@\n\
       Tacentries.arg_intern = @[%a@];@\n\
       Tacentries.arg_subst = @[%a@];@\n\
       Tacentries.arg_interp = @[%a@];@\n\
-                 Tacentries.arg_printer = @[((fun env sigma -> %a), (fun env sigma -> %a), (fun env sigma -> %a))@];@\n}@]"
+      Tacentries.arg_printer = @[((fun env sigma -> %a), (fun env sigma -> %a), (fun env sigma -> %a))@];@\n}@]"
       (force_is_plugin ~what:"ARGUMENT EXTEND" ())
       print_string name
       VernacArgumentExt.print_rules (name, arg.argext_rules)
       pr_tag arg.argext_type
       intern () subst () interp () print_code rpr print_code gpr print_code tpr
   in
-  fprintf fmt "let (wit_%s, %s) = @[%a@]@\nlet _ = (wit_%s, %s)@\n"
+  fprintf fmt "@[<2>let (wit_%s, %s) =@ @[%a@]@]@\nlet _ = (wit_%s, %s)@\n"
     name name pr () name name
 
 end
 
 let declare_plugin fmt name =
-  Option.iter (fprintf fmt "let _ = Mltop.add_known_module \"%s\"@\n") name;
   let () = match !plugin_name with
     | None -> plugin_name := Some name
     | Some _ -> fatal "Multiple DECLARE PLUGIN not allowed";

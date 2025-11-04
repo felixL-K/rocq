@@ -191,17 +191,17 @@ let build_functional_principle env (sigma : Evd.evar_map) old_princ_type sorts f
     (Induction.compute_elim_sig sigma (EConstr.of_constr old_princ_type))
       .Induction.nparams
   in
+  let funs = Array.map EConstr.mkConstU funs in
   let new_principle_type =
     Functional_principles_types.compute_new_princ_type_from_rel (Global.env ())
-      (Array.map Constr.mkConstU funs)
+      (Array.map (EConstr.to_constr sigma) funs)
       (Array.map (fun s -> EConstr.ESorts.kind sigma s) sorts) old_princ_type
   in
   let sigma, _ =
     Typing.type_of ~refresh:true env sigma
       (EConstr.of_constr new_principle_type)
   in
-  let map (c, u) = EConstr.mkConstU (c, EConstr.EInstance.make u) in
-  let ftac = proof_tac (Array.map map funs) mutr_nparams in
+  let ftac = proof_tac funs mutr_nparams in
   let uctx = Evd.ustate sigma in
   let typ = EConstr.of_constr new_principle_type in
   let body, typ, univs, _safe, _uctx =
@@ -260,8 +260,8 @@ let generate_functional_principle (evd : Evd.evar_map ref) old_princ_type sorts
       match new_princ_name with
       | Some {CAst.v=id; loc} -> (id, id, loc)
       | None ->
-        let id_of_f = Label.to_id (Constant.label (fst f)) in
-        (id_of_f, Indrec.make_elimination_ident id_of_f (EConstr.ESorts.quality_or_set !evd type_sort), None)
+        let id_of_f = Constant.label (fst f) in
+        (id_of_f, Elimschemes.make_elimination_ident id_of_f (EConstr.ESorts.quality_or_set !evd type_sort), None)
     in
     let names = ref [new_princ_name] in
     let hook new_principle_type _ =
@@ -271,7 +271,7 @@ let generate_functional_principle (evd : Evd.evar_map ref) old_princ_type sorts
           let evd' = Evd.from_env (Global.env ()) in
           let evd', s = Evd.fresh_sort_in_quality evd' sort in
           let name =
-            Indrec.make_elimination_ident base_new_princ_name sort
+            Elimschemes.make_elimination_ident base_new_princ_name sort
           in
           let evd', value =
             change_property_sort evd' s new_principle_type new_princ_name
@@ -354,7 +354,7 @@ let generate_principle (evd : Evd.evar_map ref) pconstants on_error is_general
         List.map_i
           (fun i _x ->
             let env = Global.env () in
-            let princ = Indrec.lookup_eliminator env (ind_kn, i) UnivGen.QualityOrSet.prop in
+            let princ = Elimschemes.lookup_eliminator env (ind_kn, i) UnivGen.QualityOrSet.prop in
             let evd = ref (Evd.from_env env) in
             let evd', uprinc = Evd.fresh_global env !evd princ in
             let _ = evd := evd' in
@@ -364,7 +364,7 @@ let generate_principle (evd : Evd.evar_map ref) pconstants on_error is_general
             evd := sigma;
             let princ_type = EConstr.Unsafe.to_constr princ_type in
             generate_functional_principle evd princ_type None None
-              (Array.of_list pconstants) (* funs_kn *)
+              (Array.map_of_list (fun (c, u) -> c, EConstr.EInstance.make u ) pconstants) (* funs_kn *)
               i
               (continue_proof 0 [|funs_kn.(i)|]))
           0 fix_rec_l
@@ -847,7 +847,7 @@ let tauto =
   let open Ltac_plugin in
   let dp = List.map Id.of_string ["Tauto"; "Init"; "Corelib"] in
   let mp = ModPath.MPfile (DirPath.make dp) in
-  let kn = KerName.make mp (Label.make "tauto") in
+  let kn = KerName.make mp (Id.of_string "tauto") in
   Proofview.tclBIND (Proofview.tclUNIT ()) (fun () ->
       let body = Tacenv.interp_ltac kn in
       Tacinterp.eval_tactic body)
@@ -1114,10 +1114,9 @@ let prove_fun_complete funcs graphs schemes lemmas_types_infos i :
               || Rtree.is_infinite Declareops.eq_recarg
                    graph_def.Declarations.mind_recargs
             then
-              let eq_lemma =
-                try Option.get infos.equation_lemma
-                with Option.IsNone ->
-                  CErrors.anomaly (Pp.str "Cannot find equation lemma.")
+              let eq_lemma = match infos.equation_lemma with
+              | None -> CErrors.anomaly (Pp.str "Cannot find equation lemma.")
+              | Some lemma -> lemma
               in
               tclTHENLIST
                 [ tclMAP Simple.intro ids
@@ -1197,7 +1196,7 @@ let get_funs_constant mp =
         (fun i na ->
           match na.Context.binder_name with
           | Name id ->
-            let const = Constant.make2 mp (Label.of_id id) in
+            let const = Constant.make2 mp id in
             (const, i)
           | Anonymous -> CErrors.anomaly (Pp.str "Anonymous fix."))
         na
@@ -1275,7 +1274,7 @@ let get_funs_constant mp =
     in
     l_const
 
-let make_scheme evd (fas : (Constr.pconstant * UnivGen.QualityOrSet.t) list) : _ list =
+let make_scheme evd (fas : (Constant.t EConstr.puniverses * UnivGen.QualityOrSet.t) list) : _ list =
   let exception Found_type of int in
   let env = Global.env () in
   let funs = List.map fst fas in
@@ -1301,7 +1300,7 @@ let make_scheme evd (fas : (Constr.pconstant * UnivGen.QualityOrSet.t) list) : _
     List.map
       (fun idx ->
         let ind = (first_fun_kn, idx) in
-        ((ind, EConstr.EInstance.make @@ snd first_fun), true, EConstr.ESorts.prop))
+        ((ind, snd first_fun), true, EConstr.ESorts.prop))
       funs_indexes
   in
   let sigma, schemes = Indrec.build_mutual_induction_scheme env !evd ind_list in
@@ -1355,7 +1354,7 @@ let make_scheme evd (fas : (Constr.pconstant * UnivGen.QualityOrSet.t) list) : _
   if List.is_empty other_princ_types then [(body, typ, univs, opaque)]
   else
     let other_fun_princ_types =
-      let funs = Array.map Constr.mkConstU this_block_funs in
+      let funs = Array.map EConstr.(mkConstU %> to_constr sigma) this_block_funs in
       let sorts = Array.of_list sorts in
       let sorts = Array.map (fun s -> EConstr.ESorts.kind sigma s) sorts in
       List.map
@@ -1370,7 +1369,7 @@ let make_scheme evd (fas : (Constr.pconstant * UnivGen.QualityOrSet.t) list) : _
       List.map (* we can now compute the other principles *)
         (fun scheme_type ->
           incr i;
-          observe (Printer.pr_lconstr_env env sigma scheme_type);
+          observe (fun () -> Printer.pr_lconstr_env env sigma scheme_type);
           let type_concl = Term.strip_prod_decls scheme_type in
           let applied_f =
             List.hd (List.rev (snd (Constr.decompose_app_list type_concl)))
@@ -1387,7 +1386,7 @@ let make_scheme evd (fas : (Constr.pconstant * UnivGen.QualityOrSet.t) list) : _
                 let g = fst (Constr.decompose_app applied_g) in
                 if Constr.equal f g then raise (Found_type j);
                 observe
-                  Pp.(
+                  Pp.(fun () ->
                     Printer.pr_lconstr_env env sigma f
                     ++ str " <> "
                     ++ Printer.pr_lconstr_env env sigma g))
@@ -1419,14 +1418,13 @@ let make_scheme evd (fas : (Constr.pconstant * UnivGen.QualityOrSet.t) list) : _
    lemmas for each function in [funs] w.r.t. [graphs]
 *)
 
-let derive_correctness (funs : Constr.pconstant list) (graphs : inductive list)
+let derive_correctness (funs : Constant.t EConstr.puniverses list) (graphs : inductive list)
     =
   let open EConstr in
   assert (funs <> []);
   assert (graphs <> []);
   let funs = Array.of_list funs and graphs = Array.of_list graphs in
-  let map (c, u) = mkConstU (c, EInstance.make u) in
-  let funs_constr = Array.map map funs in
+  let funs_constr = Array.map mkConstU funs in
   (* XXX STATE Why do we need this... why is the toplevel protection not enough *)
   funind_purify
     (fun () ->
@@ -1450,7 +1448,7 @@ let derive_correctness (funs : Constr.pconstant list) (graphs : inductive list)
               Reductionops.nf_zeta env !evd type_of_lemma
             in
             observe
-              Pp.(
+              Pp.(fun () ->
                 str "type_of_lemma := "
                 ++ Printer.pr_leconstr_env env !evd type_of_lemma);
             (type_of_lemma, type_info))
@@ -1476,7 +1474,7 @@ let derive_correctness (funs : Constr.pconstant list) (graphs : inductive list)
       in
       Array.iteri
         (fun i f_as_constant ->
-          let f_id = Label.to_id (Constant.label (fst f_as_constant)) in
+          let f_id = Constant.label (fst f_as_constant) in
           (*i The next call to mk_correct_id is valid since we are constructing the lemma
               Ensures by: obvious
             i*)
@@ -1485,7 +1483,7 @@ let derive_correctness (funs : Constr.pconstant list) (graphs : inductive list)
           let info = Declare.Info.make () in
           let cinfo = Declare.CInfo.make ~name:lem_id ~typ () in
           let lemma = Declare.Proof.start ~cinfo ~info !evd in
-          let lemma = fst @@ Declare.Proof.by (proving_tac i) lemma in
+          let lemma = fst @@ Declare.Proof.by (Global.env ()) (proving_tac i) lemma in
           let (_ : _ list) =
             Declare.Proof.save_regular ~proof:lemma
               ~opaque:Vernacexpr.Transparent ~idopt:None
@@ -1517,7 +1515,7 @@ let derive_correctness (funs : Constr.pconstant list) (graphs : inductive list)
             in
             let type_of_lemma = Reductionops.nf_zeta env !evd type_of_lemma in
             observe
-              Pp.(
+              Pp.(fun () ->
                 str "type_of_lemma := "
                 ++ Printer.pr_leconstr_env env !evd type_of_lemma);
             (type_of_lemma, type_info))
@@ -1542,7 +1540,7 @@ let derive_correctness (funs : Constr.pconstant list) (graphs : inductive list)
       in
       Array.iteri
         (fun i f_as_constant ->
-          let f_id = Label.to_id (Constant.label (fst f_as_constant)) in
+          let f_id = Constant.label (fst f_as_constant) in
           (*i The next call to mk_complete_id is valid since we are constructing the lemma
               Ensures by: obvious
             i*)
@@ -1554,7 +1552,7 @@ let derive_correctness (funs : Constr.pconstant list) (graphs : inductive list)
           let lemma = Declare.Proof.start ~cinfo sigma ~info in
           let lemma =
             fst
-              (Declare.Proof.by
+              (Declare.Proof.by (Global.env ())
                  (observe_tac
                     ("prove completeness (" ^ Id.to_string f_id ^ ")")
                     (proving_tac i))
@@ -1596,8 +1594,7 @@ let derive_inversion env fix_names =
             Evd.fresh_global env evd
               (Option.get (Constrintern.locate_reference (Libnames.qualid_of_ident id)))
           in
-          let cst, u = EConstr.destConst evd c in
-          (evd, (cst, EConstr.EInstance.kind evd u) :: l))
+          (evd, EConstr.destConst evd c :: l))
         fix_names (evd', [])
     in
     (*
@@ -2094,7 +2091,7 @@ let make_graph (f_ref : GlobRef.t) =
         in
         l
       | _ ->
-        let fname = CAst.make (Label.to_id (Constant.label c)) in
+        let fname = CAst.make (Constant.label c) in
         [ None, { Vernacexpr.fname
           ; univs = None
           ; binders = nal_tas
@@ -2112,7 +2109,7 @@ let make_graph (f_ref : GlobRef.t) =
     (* We register the infos *)
     List.iter
       (fun {Vernacexpr.fname = {CAst.v = id}} ->
-        add_Function false (Constant.make2 mp (Label.of_id id)))
+        add_Function false (Constant.make2 mp id))
       (snd expr_list)
 
 (* *************** statically typed entrypoints ************************* *)
@@ -2155,7 +2152,7 @@ let build_scheme fas =
                 ++ spc ()
                 ++ str "should be the named of a globally defined function")
         in
-        ((c, EConstr.EInstance.kind !evd u), sort))
+        ((c, u), sort))
       fas
   in
   let bodies_types = make_scheme evd pconstants in

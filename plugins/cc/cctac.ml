@@ -70,7 +70,7 @@ let rec decompose_term env sigma t =
         let u = EInstance.kind sigma u in
         let oib = Environ.lookup_mind (fst ind) env in
         let nargs = constructor_nallargs env cstr in
-        ATerm.mkConstructor env {ci_constr = (cstr, u);
+        ATerm.mkConstructor env {ci_constr = Construct (cstr, u);
                        ci_arity=nargs;
                        ci_nhyps=nargs-oib.mind_nparams}
     | Ind c ->
@@ -87,6 +87,12 @@ let rec decompose_term env sigma t =
         let p' = Projection.map canon_mind p in
         let c = Retyping.expand_projection env sigma p' c [] in
         decompose_term env sigma c
+    | String s ->
+        ATerm.mkConstructor env { ci_constr = String s; ci_arity = 0; ci_nhyps = 0 }
+    | Int i ->
+        ATerm.mkConstructor env { ci_constr = Int i; ci_arity = 0; ci_nhyps = 0 }
+    | Float f ->
+        ATerm.mkConstructor env { ci_constr = Float f; ci_arity = 0; ci_nhyps = 0 }
     | _ ->
        let t = Termops.strip_outer_cast sigma t in
        if closed0 sigma t then ATerm.mkSymb (EConstr.to_constr ~abort_on_undefined_evars:false sigma t) else raise Not_found
@@ -252,14 +258,6 @@ let make_prb gls depth additional_terms b =
 let fresh_id env id =
   Namegen.next_ident_away id (Environ.ids_of_named_context_val @@ Environ.named_context_val env)
 
-let build_projection env sigma intype (cstr : pconstructor) special default =
-  let ci = (snd (fst cstr)) in
-  let body = Combinators.make_selector env sigma ~pos:ci ~special ~default (mkRel 1) intype in
-  let id = fresh_id env (Id.of_string "t") in
-  sigma, mkLambda (make_annot (Name id) ERelevance.relevant, intype, body)
-
-(* generate an adhoc tactic following the proof tree  *)
-
 let app_global f args k =
   Tacticals.pf_constr_of_global (Lazy.force f) >>= fun fc -> k (mkApp (fc, args))
 
@@ -353,7 +351,7 @@ let rec proof_term env sigma (typ, lhs, rhs) p = match p.p_rule with
   let default = constr_of_term p.p_lhs in
   let special = mkRel (1 + nargs - argind) in
   let sigma, argty = type_and_refresh_ env sigma ti in
-  let sigma, proj = build_projection env sigma argty cstr special default in
+  let sigma, proj = Ccprojectability.build_projection env sigma cstr argind typ default special argty in
   let sigma, prf = proof_term env sigma (argty, ti, tj) prf in
   app_global_ env sigma _f_equal [|argty; typ; proj; ti; tj; prf|]
 
@@ -484,7 +482,7 @@ let cc_tactic depth additional_terms b =
         | HeqnH (ida,idb) ->
           convert_to_hyp_tac ida ta idb tb p)
       begin function (e, info) -> match e with
-        | Tactics.NotConvertible ->
+        | TacticErrors.NotConvertible ->
           Tacticals.tclFAIL
             (str (if b then "simple congruence failed" else "congruence failed") ++
              str " (cannot build a well-typed proof)")

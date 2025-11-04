@@ -127,13 +127,13 @@ end =
 struct
   type t = {
     root : DirPath.t;
-    data : Mod_subst.delta_resolver MPmap.t;
+    data : Mod_subst.delta_resolver ModPath.Map.t;
     (** Invariant: No [MPdot] in data *)
   }
 
   let empty root = {
     root = root;
-    data = MPmap.empty;
+    data = ModPath.Map.empty;
   }
 
   let rec head mp = match mp with
@@ -144,25 +144,25 @@ struct
     let self = MPfile preso.root in
     let data =
       if ModPath.subpath self mp then
-        match MPmap.find_opt self preso.data with
+        match ModPath.Map.find_opt self preso.data with
         | None ->
           (* we were at toplevel *)
-          MPmap.add self delta preso.data
+          ModPath.Map.add self delta preso.data
         | Some reso ->
-          MPmap.add self (Mod_subst.add_delta_resolver delta reso) preso.data
+          ModPath.Map.add self (Mod_subst.add_delta_resolver delta reso) preso.data
       else
         let () = match mp with
         | MPfile _ | MPbound _ -> ()
         | MPdot _ -> assert false
         in
-        let () = assert (not (MPmap.mem mp preso.data)) in
-        MPmap.add mp delta preso.data
+        let () = assert (not (ModPath.Map.mem mp preso.data)) in
+        ModPath.Map.add mp delta preso.data
     in
     { preso with data }
 
   let kn_of_delta preso kn =
     let head = head (KerName.modpath kn) in
-    match MPmap.find_opt head preso.data with
+    match ModPath.Map.find_opt head preso.data with
     | None -> kn
     | Some delta -> Mod_subst.kn_of_delta delta kn
 
@@ -175,8 +175,7 @@ end
 type compiled_library = {
   comp_name : DirPath.t;
   comp_mod : module_body;
-  comp_univs : Univ.ContextSet.t;
-  comp_qualities : Sorts.QVar.Set.t;
+  comp_univs : Sorts.QVar.Set.t * Univ.ContextSet.t;
   comp_deps : library_info array;
   comp_flags : permanent_flags;
 }
@@ -192,7 +191,8 @@ type required_lib = {
 type section_data = {
   rev_env : Environ.env;
   rev_univ : Univ.ContextSet.t;
-  rev_objlabels : Label.Set.t;
+  rev_qualities : Sorts.QVar.Set.t;
+  rev_objlabels : Id.Set.t;
   rev_reimport : reimport list;
   rev_revstruct : structure_body;
   rev_paramresolver : ParamResolver.t;
@@ -224,12 +224,13 @@ type safe_environment =
     modresolver : Mod_subst.delta_resolver;
     paramresolver : ParamResolver.t;
     revstruct : structure_body;
-    modlabels : Label.Set.t;
-    objlabels : Label.Set.t;
+    modlabels : Id.Set.t;
+    objlabels : Id.Set.t;
     univ : Univ.ContextSet.t;
-    qualities : Sorts.QVar.Set.t ;
+    (* maybe should be a qglobal set? *)
+    qualities : Sorts.QVar.Set.t;
     future_cst : (Constant_typing.typing_context * safe_environment * Nonce.t) HandleMap.t;
-    required : required_lib DPmap.t;
+    required : required_lib DirPath.Map.t;
     loads : (ModPath.t * module_body) list;
     local_retroknowledge : Retroknowledge.action list;
     opaquetab : Opaqueproof.opaquetab;
@@ -254,13 +255,13 @@ let empty_environment =
     modresolver = Mod_subst.empty_delta_resolver ModPath.dummy;
     paramresolver = ParamResolver.empty DirPath.dummy;
     revstruct = [];
-    modlabels = Label.Set.empty;
-    objlabels = Label.Set.empty;
+    modlabels = Id.Set.empty;
+    objlabels = Id.Set.empty;
     sections = None;
     future_cst = HandleMap.empty;
     univ = Univ.ContextSet.empty;
     qualities = Sorts.QVar.Set.empty ;
-    required = DPmap.empty;
+    required = DirPath.Map.empty;
     loads = [];
     local_retroknowledge = [];
     opaquetab = Opaqueproof.empty_opaquetab;
@@ -419,7 +420,7 @@ struct
 module SeffOrd = struct
 type t = side_effect
 let compare e1 e2 =
-  Constant.CanOrd.compare e1.seff_constant e2.seff_constant
+  Constant.UserOrd.compare e1.seff_constant e2.seff_constant
 end
 
 module SeffSet = Set.Make(SeffOrd)
@@ -522,7 +523,7 @@ let push_context_set ~strict cst senv =
 let add_constraints cst senv =
   push_context_set ~strict:true cst senv
 
-let push_quality_set qs senv =
+let push_qualities qs senv =
   if Sorts.QVar.Set.is_empty qs then senv
   else
     let () = if is_modtype senv
@@ -531,7 +532,7 @@ let push_quality_set qs senv =
     let sections = Option.map (Section.push_mono_qualities qs) senv.sections
     in
     { senv with
-      env = Environ.push_quality_set qs senv.env ;
+      env = Environ.push_qualities qs senv.env ;
       qualities = Sorts.QVar.Set.union qs senv.qualities ;
       sections
     }
@@ -543,8 +544,8 @@ let is_joined_environment e = HandleMap.is_empty e.future_cst
 
 (** {6 Various checks } *)
 
-let exists_modlabel l senv = Label.Set.mem l senv.modlabels
-let exists_objlabel l senv = Label.Set.mem l senv.objlabels
+let exists_modlabel l senv = Id.Set.mem l senv.modlabels
+let exists_objlabel l senv = Id.Set.mem l senv.objlabels
 
 let check_modlabel l senv =
   if exists_modlabel l senv then Modops.error_existing_label l
@@ -553,14 +554,14 @@ let check_objlabel l senv =
   if exists_objlabel l senv then Modops.error_existing_label l
 
 let check_objlabels ls senv =
-  Label.Set.iter (fun l -> check_objlabel l senv) ls
+  Id.Set.iter (fun l -> check_objlabel l senv) ls
 
 (** Are we closing the right module / modtype ?
     No user error here, since the opening/ending coherence
     is now verified in [vernac_end_segment] *)
 
 let check_current_label lab = function
-  | MPdot (_,l) -> assert (Label.equal lab l)
+  | MPdot (_,l) -> assert (Id.equal lab l)
   | _ -> assert false
 
 let check_struct = function
@@ -591,7 +592,7 @@ let check_empty_struct senv =
     with the correct digests. *)
 
 let check_required current_libs needed =
-  let check current (id, required) = match DPmap.find_opt id current with
+  let check current (id, required) = match DirPath.Map.find_opt id current with
   | None ->
     CErrors.user_err Pp.(pr_sequence str ["Reference to unknown module"; DirPath.to_string id; "."])
   | Some { req_root; req_digest = actual } ->
@@ -600,7 +601,7 @@ let check_required current_libs needed =
         ["Inconsistent assumptions over module"; DirPath.to_string id; "."])
     else if req_root then
       (* the library is being transitively required, not a root anymore *)
-      DPmap.set id { req_root = false; req_digest = actual } current
+      DirPath.Map.set id { req_root = false; req_digest = actual } current
     else
       (* nothing to do *)
       current
@@ -663,8 +664,8 @@ let push_section_context uctx senv =
 
 let labels_of_mib mib =
   let add,get =
-    let labels = ref Label.Set.empty in
-    (fun id -> labels := Label.Set.add (Label.of_id id) !labels),
+    let labels = ref Id.Set.empty in
+    (fun id -> labels := Id.Set.add id !labels),
     (fun () -> !labels)
   in
   let visit_mip mip =
@@ -693,11 +694,11 @@ let add_field ((l,sfb) as field) gn senv =
   let mlabs,olabs = match sfb with
     | SFBmind mib ->
       let l = labels_of_mib mib in
-      check_objlabels l senv; (Label.Set.empty,l)
+      check_objlabels l senv; (Id.Set.empty,l)
     | SFBconst _ | SFBrules _ ->
-      check_objlabel l senv; (Label.Set.empty, Label.Set.singleton l)
+      check_objlabel l senv; (Id.Set.empty, Id.Set.singleton l)
     | SFBmodule _ | SFBmodtype _ ->
-      check_modlabel l senv; (Label.Set.singleton l, Label.Set.empty)
+      check_modlabel l senv; (Id.Set.singleton l, Id.Set.empty)
   in
   let env' = match sfb, gn with
     | SFBconst cb, C con -> Environ.add_constant con cb senv.env
@@ -724,8 +725,8 @@ let add_field ((l,sfb) as field) gn senv =
     env = env';
     sections;
     revstruct = field :: senv.revstruct;
-    modlabels = Label.Set.union mlabs senv.modlabels;
-    objlabels = Label.Set.union olabs senv.objlabels }
+    modlabels = Id.Set.union mlabs senv.modlabels;
+    objlabels = Id.Set.union olabs senv.objlabels }
 
 (** Applying a certain function to the resolver of a safe environment *)
 
@@ -792,7 +793,7 @@ let inline_side_effects env body side_eff =
   if List.is_empty side_eff then (body, Univ.ContextSet.empty, sigs, 0)
   else
     (** Second step: compute the lifts and substitutions to apply *)
-    let cname c r = Context.make_annot (Name (Label.to_id (Constant.label c))) r in
+    let cname c r = Context.make_annot (Name (Constant.label c)) r in
     let fold (subst, var, ctx, args) { seff_constant = c; seff_body = (_hbody, cb); seff_univs = univs; _ } =
       let (b, opaque) = match cb.const_body with
       | Def b -> (b, false)
@@ -855,7 +856,7 @@ let warn_failed_cert = CWarnings.create ~name:"failed-abstract-certificate"
     ~category:CWarnings.CoreCategories.tactics ~default:CWarnings.Disabled
     Pp.(fun kn ->
         str "Certificate for private constant " ++
-        Label.print (Constant.label kn) ++
+        Id.print (Constant.label kn) ++
         str " failed.")
 
 (* Given the list of signatures of side effects, checks if they match.
@@ -1169,7 +1170,7 @@ let check_mind mie lab =
   | [] -> assert false (* empty inductive entry *)
   | oie::_ ->
     (* The label and the first inductive type name should match *)
-    assert (Id.equal (Label.to_id lab) oie.mind_entry_typename)
+    assert (Id.equal lab oie.mind_entry_typename)
 
 let add_checked_mind kn mib senv =
   let mib =
@@ -1201,7 +1202,7 @@ let add_mind ?typing_flags l mie senv =
 (** Insertion of module types *)
 
 let check_state senv =
-  (Environ.universes senv.env, Conversion.checked_universes)
+  (Environ.universes senv.env, Conversion.checked_universes senv.env)
 
 let vm_handler env univs c vmtab =
   let env = Environ.set_vm_library vmtab env in
@@ -1270,8 +1271,8 @@ let start_mod_modtype ~istype l senv =
 
     (* module local fields *)
     revstruct = [];
-    modlabels = Label.Set.empty;
-    objlabels = Label.Set.empty;
+    modlabels = Id.Set.empty;
+    objlabels = Id.Set.empty;
     loads = [];
     local_retroknowledge = [];
   }
@@ -1300,7 +1301,7 @@ let add_module_parameter mbid mte inl senv =
   | None -> senv.paramresolver
   | Some delta -> ParamResolver.add_delta_resolver mp delta senv.paramresolver
   in
-  mod_delta mtb,
+  mtb,
   { senv with
     modvariant = new_variant;
     paramresolver = new_paramresolver }
@@ -1358,7 +1359,7 @@ let propagate_senv newdef newenv newresolver senv oldsenv =
     env = newenv;
     modresolver = newresolver;
     revstruct = newdef::oldsenv.revstruct;
-    modlabels = Label.Set.add (fst newdef) oldsenv.modlabels;
+    modlabels = Id.Set.add (fst newdef) oldsenv.modlabels;
     univ = senv.univ;
     qualities = senv.qualities ;
     future_cst = senv.future_cst;
@@ -1377,7 +1378,7 @@ let end_module l restype senv =
   let mbids = List.rev_map fst params in
   let mb = build_module_body params restype senv in
   let newenv = Environ.set_universes (Environ.universes senv.env) oldsenv.env in
-  let newenv = Environ.set_qualities (Environ.qualities senv.env) newenv in
+  let newenv = Environ.set_qualities (Environ.qvars senv.env) newenv in
   let newenv = if Environ.rewrite_rules_allowed senv.env then Environ.allow_rewrite_rules newenv else newenv in
   let newenv = Environ.set_vm_library (Environ.vm_library senv.env) newenv in
   let senv' = propagate_loads { senv with env = newenv } in
@@ -1421,12 +1422,14 @@ let add_include me is_module inl senv =
   let senv = set_vm_library vmtab senv in
   (* Include Self support  *)
   let struc = NoFunctor (List.rev senv.revstruct) in
-  let mb = build_mtb struc senv.modresolver in
+  let mb = Mod_declarations.make_module_body struc senv.modresolver [] in
   let rec compute_sign sign resolver =
     match sign with
     | MoreFunctor(mbid,mtb,str) ->
       let state = check_state senv in
-      let (_ : UGraph.t) = Subtyping.check_subtypes state senv.env mp_sup mb (MPbound mbid) mtb in
+      (* Module subcomponents are already part of senv.env at this point *)
+      let env = Environ.shallow_add_module mp_sup mb senv.env in
+      let (_ : UGraph.t) = Subtyping.check_subtypes state env mp_sup (MPbound mbid) mtb in
       let mpsup_delta =
         Modops.inline_delta_resolver senv.env inl mp_sup mbid mtb senv.modresolver
       in
@@ -1482,8 +1485,8 @@ let start_library dir senv =
     modresolver = Mod_subst.empty_delta_resolver mp;
     paramresolver = ParamResolver.empty dir;
     revstruct = [];
-    modlabels = Label.Set.empty;
-    objlabels = Label.Set.empty;
+    modlabels = Id.Set.empty;
+    objlabels = Id.Set.empty;
     sections = None;
     future_cst = HandleMap.empty;
     univ = Univ.ContextSet.empty;
@@ -1509,12 +1512,11 @@ let export ~output_native_objects senv dir =
   let filter_dep (dp, { req_root; req_digest }) =
     if req_root then Some (dp, req_digest) else None
   in
-  let comp_deps = List.map_filter filter_dep (DPmap.bindings senv.required) in
+  let comp_deps = List.map_filter filter_dep (DirPath.Map.bindings senv.required) in
   let lib = {
     comp_name = dir;
     comp_mod = mb;
-    comp_univs = senv.univ;
-    comp_qualities = Environ.qualities senv.env;
+    comp_univs = senv.qualities, senv.univ;
     comp_deps = Array.of_list comp_deps;
     comp_flags = permanent_flags
   } in
@@ -1530,9 +1532,10 @@ let import lib vmtab vodigest senv =
           ++ DirPath.print lib.comp_name ++ str").");
   let mp = MPfile lib.comp_name in
   let mb = lib.comp_mod in
-  let env = Environ.push_context_set ~strict:true lib.comp_univs senv.env in
+  let qualities, univs = lib.comp_univs in
+  let env = Environ.push_qualities qualities senv.env in
+  let env = Environ.push_context_set ~strict:true univs env in
   let env = Environ.link_vm_library vmtab env in
-  let env = Environ.push_quality_set lib.comp_qualities env in
   let env =
     let linkinfo = Nativecode.link_info_of_dirpath lib.comp_name in
     Modops.add_linked_module mp mb linkinfo env
@@ -1543,10 +1546,10 @@ let import lib vmtab vodigest senv =
       senv.sections
   in
   let required =
-    if DPmap.mem lib.comp_name required then
+    if DirPath.Map.mem lib.comp_name required then
       (* should probably be an error, we are requiring the same library twice *)
       required
-    else DPmap.add lib.comp_name { req_root = true; req_digest = vodigest } required
+    else DirPath.Map.add lib.comp_name { req_root = true; req_digest = vodigest } required
   in
   mp,
   { senv with
@@ -1565,6 +1568,7 @@ let open_section senv =
   let custom = {
     rev_env = senv.env;
     rev_univ = senv.univ;
+    rev_qualities = senv.qualities;
     rev_objlabels = senv.objlabels;
     rev_reimport = [];
     rev_revstruct = senv.revstruct;
@@ -1583,17 +1587,20 @@ let close_section senv =
      were forced inside the section, they have been turned into global monomorphic
      that are going to be replayed. Those that are not forced are not readded
      by {!add_constant_aux}. *)
-  let { rev_env = env; rev_univ = univ; rev_objlabels = objlabels;
+  let { rev_env = env; rev_univ = univ; rev_qualities = qualities; rev_objlabels = objlabels;
         rev_reimport; rev_revstruct = revstruct; rev_paramresolver = paramresolver } = revert in
   let env = if Environ.rewrite_rules_allowed env0 then Environ.allow_rewrite_rules env else env in
-  let senv = { senv with env; revstruct; sections; univ; objlabels; paramresolver } in
+  let senv = { senv with env; revstruct; sections; univ; qualities; objlabels; paramresolver } in
   (* Second phase: replay Requires *)
   let senv = List.fold_left (fun senv (lib,vmtab,vodigest) -> snd (import lib vmtab vodigest senv))
       senv (List.rev rev_reimport)
   in
   (* Third phase: replay the discharged section contents *)
+  let filtered_qualities =
+    Sorts.QVar.Set.filter (fun q -> not @@ Sorts.QVar.is_unif q) senv.qualities in
+  let senv = { senv with qualities = filtered_qualities } in
   let senv = push_context_set ~strict:true cstrs senv in
-  let senv = push_quality_set qs senv in
+  let senv = push_qualities qs senv in
   let fold entry senv =
     match entry with
   | SecDefinition kn ->

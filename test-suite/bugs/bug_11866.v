@@ -19,25 +19,29 @@ Fail Ltac2 Notation ":::7" x(tactic) "+7" y(tactic) : 7 := ().
 Goal True.
   ex0 :::0 0 +0 0.
   ex1 :::0 0 +0 0.
-  (*ex2 :::0 0 +0 0.*) (* fails with an anomaly, cf COQBUG(https://github.com/coq/coq/issues/12807) *)
+  (*ex2 :::0 0 +0 0.*) (* fails with an anomaly, cf COQBUG(https://github.com/rocq-prover/rocq/issues/12807) *)
   (*ex3 :::0 0 +0 0.*)
   ex4 :::0 0 +0 0.
   ex5 :::0 0 +0 0.
   ex6 :::0 0 +0 0.
 
-  ex0 :::1 0 +1 0.
+  (*ex0 :::1 0 +1 0.*)
   ex1 :::1 0 +1 0.
   (*ex2 :::1 0 +1 0.*)
   (*ex3 :::1 0 +1 0.*)
   ex4 :::1 0 +1 0.
+  ex4 :::4 0 +4 0.
+  (*ex4 :::5 0 +5 0.*)
   ex5 :::1 0 +1 0.
+  ex5 :::5 0 +5 0.
+  (*ex5 :::6 0 +6 0.*)
   ex6 :::1 0 +1 0.
 
-  ex0 :::6 0 +6 0.
-  ex1 :::6 0 +6 0.
+  (*ex0 :::6 0 +6 0.*)
+  (*ex1 :::6 0 +6 0.*)
   (*ex2 :::6 0 +6 0.*)
   (*ex3 :::6 0 +6 0.*)
-  ex4 :::6 0 +6 0.
-  ex5 :::6 0 +6 0.
+  (*ex4 :::6 0 +6 0.*)
+  (*ex5 :::6 0 +6 0.*)
   ex6 :::6 0 +6 0.
 Abort.

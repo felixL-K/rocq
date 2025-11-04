@@ -35,7 +35,7 @@ type effect_name = string
 (** create a persistent set to store effect functions *)
 
 (* Table bindings a constant to an effect *)
-let constant_effect_table = Summary.ref ~name:"reduction-side-effect" Cmap.empty
+let constant_effect_table = Summary.ref ~name:"reduction-side-effect" Cmap_env.empty
 
 (* Table bindings function key to effective functions *)
 let effect_table = ref String.Map.empty
@@ -43,13 +43,13 @@ let effect_table = ref String.Map.empty
 (** a test to know whether a constant is actually the effect function *)
 let reduction_effect_hook env sigma con c =
   try
-    let funkey = Cmap.find con !constant_effect_table in
+    let funkey = Cmap_env.find con !constant_effect_table in
     let effect_function = String.Map.find funkey !effect_table in
     effect_function env sigma (Lazy.force c)
   with Not_found -> ()
 
 let cache_reduction_effect (con,funkey) =
-  constant_effect_table := Cmap.add con funkey !constant_effect_table
+  constant_effect_table := Cmap_env.add con funkey !constant_effect_table
 
 let subst_reduction_effect (subst,(con,funkey)) =
   (subst_constant subst con,funkey)
@@ -758,7 +758,7 @@ and match_rigid_arg_pattern whrec env sigma ctx psubst p t =
     let na = Array.length tys in
     let contexts_upto = Array.init na (fun i -> List.skipn (na - i) ctx' @ ctx) in
     let psubst = Array.fold_left3 (fun psubst ctx -> match_arg_pattern whrec env sigma ctx psubst) psubst contexts_upto ptys tys in
-    let psubst = match_arg_pattern whrec env sigma (ctx' @ ctx) psubst pbod body in
+    let psubst = match_arg_pattern whrec env sigma (ctx' @ ctx) psubst (ERigid pbod) body in
     psubst
   | PHProd (ptys, pbod), _ ->
     let ntys, _ = EConstr.decompose_prod sigma t in
@@ -789,10 +789,9 @@ and apply_rule whrec env sigma ctx psubst es stk =
       let args, s = extract_n_stack [] np s in
       let psubst = List.fold_left2 (match_arg_pattern whrec env sigma ctx) psubst pargs args in
       apply_rule whrec env sigma ctx psubst e s
-  | Declarations.PECase (pind, pu, pret, pbrs) :: e, Stack.Case (ci, u, pms, p, iv, brs) :: s ->
+  | Declarations.PECase (pind, pret, pbrs) :: e, Stack.Case (ci, u, pms, p, iv, brs) :: s ->
       if not @@ QInd.equal env pind ci.ci_ind then raise PatternFailure;
       let dummy = mkProp in
-      let psubst = match_einstance sigma pu u psubst in
       let (_, _, _, ((ntys_ret, ret), _), _, _, brs) = EConstr.annotate_case env sigma (ci, u, pms, p, NoInvert, dummy, brs) in
       let psubst = match_arg_pattern whrec env sigma (ntys_ret @ ctx) psubst pret ret in
       let psubst = Array.fold_left2 (fun psubst pat (ctx', br) -> match_arg_pattern whrec env sigma (ctx' @ ctx) psubst pat br) psubst pbrs brs in
@@ -1217,7 +1216,7 @@ let checked_sort_cmp_universes _env pb s0 s1 univs =
   | CONV -> check_eq univs s0 s1
 
 let check_convert_instances ~flex:_ u u' univs =
-  let csts = UVars.enforce_eq_instances u u' (Sorts.QConstraints.empty,Constraints.empty) in
+  let csts = UVars.enforce_eq_instances u u' (Sorts.QCumulConstraints.empty,Constraints.empty) in
   if Evd.check_quconstraints univs csts then Result.Ok univs else Result.Error None
 
 (* general conversion and inference functions *)
@@ -1235,11 +1234,12 @@ end
 
 let is_fconv ?(reds=TransparentState.full) pb env sigma t1 t2 =
   let univs = Evd.universes sigma in
+  let quals = Evd.elim_graph sigma in
   let t1 = EConstr.Unsafe.to_constr t1 in
   let t2 = EConstr.Unsafe.to_constr t2 in
   let b = match pb with
-  | Conversion.CUMUL -> leq_constr_univs univs t1 t2
-  | Conversion.CONV -> eq_constr_univs univs t1 t2
+  | Conversion.CUMUL -> leq_constr_univs quals univs t1 t2
+  | Conversion.CONV -> eq_constr_univs quals univs t1 t2
   in
   if b then true
   else
@@ -1277,7 +1277,7 @@ let sigma_compare_sorts _env pb s0 s1 sigma =
     end
 
 let sigma_compare_instances ~flex i0 i1 sigma =
-  match Evd.set_eq_instances ~flex sigma i0 i1 with
+  match Evd.set_eq_instances ~flex sigma (EInstance.make i0) (EInstance.make i1) with
   | sigma -> Result.Ok sigma
   | exception Evd.UniversesDiffer -> Result.Error None
   | exception UGraph.UniverseInconsistency err -> Result.Error (Some err)
@@ -1329,7 +1329,7 @@ let infer_conv_gen conv_fun ?(catch_incon=true) ?(pb=Conversion.CUMUL)
       | None -> None
       | Some cstr ->
         try Some (Evd.add_universe_constraints sigma cstr)
-        with UGraph.UniverseInconsistency _ | Evd.UniversesDiffer -> None
+        with UGraph.UniverseInconsistency _ | Evd.UniversesDiffer | QGraph.EliminationError _ -> None
       in
       match ans with
       | Some sigma -> ans
@@ -1360,6 +1360,7 @@ let infer_conv_gen conv_fun ?(catch_incon=true) ?(pb=Conversion.CUMUL)
             | Result.Error (Some e) -> raise (UGraph.UniverseInconsistency e)
   with
   | UGraph.UniverseInconsistency _ when catch_incon -> None
+  | QGraph.EliminationError _ when catch_incon -> None
   | e ->
     let e = Exninfo.capture e in
     report_anomaly e
@@ -1682,24 +1683,24 @@ module Infer = struct
 
 open Conversion
 
-let infer_eq (univs, cstrs as cuniv) u u' =
-  if UGraph.check_eq_sort univs u u' then Result.Ok cuniv
+let infer_eq elims (univs, cstrs as cuniv) s s' =
+  if UGraph.check_eq_sort elims univs s s' then Result.Ok cuniv
   else try
-    let cstrs' = UnivSubst.enforce_eq_sort u u' Constraints.empty in
+    let cstrs' = UnivSubst.enforce_eq_sort s s' Constraints.empty in
     Result.Ok (UGraph.merge_constraints cstrs' univs, Constraints.union cstrs cstrs')
-  with UGraph.UniverseInconsistency err -> Result.Error (Some err)
+  with UGraph.UniverseInconsistency err -> Result.Error (Some (Univ err))
 
-let infer_leq (univs, cstrs as cuniv) u u' =
-  if UGraph.check_leq_sort univs u u' then Result.Ok cuniv
-  else match UnivSubst.enforce_leq_alg_sort u u' univs with
+let infer_leq elims (univs, cstrs as cuniv) s s' =
+  if UGraph.check_leq_sort elims univs s s' then Result.Ok cuniv
+  else match UnivSubst.enforce_leq_alg_sort s s' univs with
   | cstrs', univs ->
     Result.Ok (univs, Univ.Constraints.union cstrs cstrs')
-  | exception UGraph.UniverseInconsistency err -> Result.Error (Some err)
+  | exception UGraph.UniverseInconsistency err -> Result.Error (Some (Univ err))
 
-let infer_cmp_universes _env pb s0 s1 univs =
+let infer_cmp_universes env pb s0 s1 cuniv =
   match pb with
-  | CUMUL -> infer_leq univs s0 s1
-  | CONV -> infer_eq univs s0 s1
+  | CUMUL -> infer_leq (Environ.qualities env) cuniv s0 s1
+  | CONV -> infer_eq (Environ.qualities env) cuniv s0 s1
 
 let infer_convert_instances ~flex u u' (univs,cstrs as cuniv) =
   if flex then
@@ -1707,17 +1708,17 @@ let infer_convert_instances ~flex u u' (univs,cstrs as cuniv) =
     else Result.Error None
   else
     let qcstrs, cstrs' = UVars.enforce_eq_instances u u' Sorts.QUConstraints.empty in
-    if Sorts.QConstraints.trivial qcstrs then
+    if Sorts.QCumulConstraints.trivial qcstrs then
       Result.Ok (univs, Constraints.union cstrs cstrs')
     else
       Result.Error None
 
 let infer_inductive_instances cv_pb variance u1 u2 (univs,csts) =
   let qcsts, csts' = get_cumulativity_constraints cv_pb variance u1 u2 in
-  if Sorts.QConstraints.trivial qcsts then
+  if Sorts.QCumulConstraints.trivial qcsts then
     match UGraph.merge_constraints csts' univs with
     | univs -> Result.Ok (univs, Univ.Constraints.union csts csts')
-    | exception (UGraph.UniverseInconsistency err) -> Result.Error (Some err)
+    | exception (UGraph.UniverseInconsistency err) -> Result.Error (Some (Univ err))
   else Result.Error None
 
 let inferred_universes =

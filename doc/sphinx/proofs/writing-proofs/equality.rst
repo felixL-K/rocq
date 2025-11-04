@@ -145,13 +145,13 @@ Rewriting with Leibniz and setoid equality
      into :n:`@term__2`.  For `<-`, :n:`@term__2` is rewritten into :n:`@term__1`.
 
    :n:`{? @natural } {? {| ? | ! } }`
-     :n:`@natural` is the number of rewrites to perform.  If `?` is given, :n:`@natural`
+     :n:`@natural` is the number of rewrites to perform.  If :n:`?` is given, :n:`@natural`
      is the maximum number of rewrites to perform; otherwise :n:`@natural` is the exact number
      of rewrites to perform.
 
-     `?` (without :n:`@natural`) performs the rewrite as many times as possible
+     :n:`?` (without :n:`@natural`) performs the rewrite as many times as possible
      (possibly zero times).
-     This form never fails.  `!` (without :n:`@natural`) performs the rewrite as many
+     This form never fails.  :n:`!` (without :n:`@natural`) performs the rewrite as many
      times as possible
      and at least once.  The tactic fails if the requested number of rewrites can't
      be performed.  :n:`@natural !` is equivalent to :n:`@natural`.
@@ -216,7 +216,7 @@ Rewriting with Leibniz and setoid equality
       :undocumented:
 
       .. todo You can use Typeclasses Debug to tell whether rewrite used
-         setoid rewriting.  Example here: https://github.com/coq/coq/pull/13470#discussion_r539230973
+         setoid rewriting.  Example here: https://github.com/rocq-prover/rocq/pull/13470#discussion_r539230973
 
    .. exn:: Cannot find a relation to rewrite.
       :undocumented:
@@ -305,30 +305,6 @@ Rewriting with Leibniz and setoid equality
       If the hypothesis is itself dependent in the goal, it is replaced by the proof of
       reflexivity of equality.
 
-   .. flag:: Regular Subst Tactic
-
-      This :term:`flag` controls the behavior of :tacn:`subst`. When it is
-      activated (it is by default), :tacn:`subst` also deals with the following corner cases:
-
-      + A context with ordered hypotheses :n:`@ident__1 = @ident__2`
-        and :n:`@ident__1 = t`, or :n:`t′ = @ident__1` with `t′` not
-        a variable, and no other hypotheses of the form :n:`@ident__2 = u`
-        or :n:`u = @ident__2`; without the flag, a second call to
-        subst would be necessary to replace :n:`@ident__2` by `t` or
-        `t′` respectively.
-      + The presence of a recursive equation which without the flag would
-        be a cause of failure of :tacn:`subst`.
-      + A context with cyclic dependencies as with hypotheses :n:`@ident__1 = f @ident__2`
-        and :n:`@ident__2 = g @ident__1` which without the
-        flag would be a cause of failure of :tacn:`subst`.
-
-      Additionally, it prevents a :term:`local definition <context-local definition>`
-      such as :n:`@ident := t` from being
-      unfolded which otherwise would exceptionally unfold in configurations
-      containing hypotheses of the form :n:`@ident = u`, or :n:`u′ = @ident`
-      with `u′` not a variable. Finally, it preserves the initial order of
-      hypotheses, which without the flag it may break.
-
    .. exn:: Cannot find any non-recursive equality over @ident.
       :undocumented:
 
@@ -382,13 +358,13 @@ Rewriting with definitional equality
    Replaces terms with other :term:`convertible` terms.
    If :n:`@one_term__from` is not specified, then :n:`@one_term__to` replaces the conclusion and/or
    the specified hypotheses.  If :n:`@one_term__from` is specified, the tactic replaces occurrences
-   of :n:`@one_term__to` within the conclusion and/or the specified hypotheses.
+   of :n:`@one_term__from` within the conclusion and/or the specified hypotheses.
 
    :n:`{? @one_term__from {? at @occs_nums } with }`
      Replaces the occurrences of :n:`@one_term__from` specified by :n:`@occs_nums`
      with :n:`@one_term__to`, provided that the two :n:`@one_term`\s are
      convertible.  :n:`@one_term__from` may contain pattern variables such as `?x`,
-     whose value which will substituted for `x` in :n:`@one_term__to`, such as in
+     whose value will be substituted for `x` in :n:`@one_term__to`, such as in
      `change (f ?x ?y) with (g (x, y))` or `change (fun x => ?f x) with f`.
 
      The `at … with …` form is deprecated in 8.14; use `with … at …` instead.
@@ -403,6 +379,7 @@ Rewriting with definitional equality
       :undocumented:
 
    .. exn:: Found an "at" clause without "with" clause
+      :name: Found an at clause without with clause
       :undocumented:
 
    .. tacn:: now_show @one_type
@@ -416,8 +393,8 @@ Rewriting with definitional equality
 .. tacn:: change_no_check {? @one_term__from {? at @occs_nums } with } @one_term__to {? @occurrences }
 
    For advanced usage. Similar to :tacn:`change`, but as an optimization,
-   it skips checking that :n:`@one_term__to` is convertible with the goal or
-   :n:`@one_term__from`.
+   it skips checking that :n:`@one_term__to` is convertible with the conclusion,
+   the specified hypotheses, or :n:`@one_term__from`.
 
    Recall that the Rocq kernel typechecks proofs again when they are concluded to
    ensure correctness. Hence, using :tacn:`change` checks convertibility twice
@@ -537,7 +514,7 @@ which reduction engine to use.  See :ref:`type-cast`.)  For example:
        construction inside the term itself (use ``zeta`` to inline these).
        Opaque constants are never unfolded except by :tacn:`vm_compute` and
        :tacn:`native_compute`
-       (see `#4476 <https://github.com/coq/coq/issues/4476>`_ and
+       (see `#4476 <https://github.com/rocq-prover/rocq/issues/4476>`_ and
        :ref:`controlling-the-reduction-strategies`).
 
    `iota`
@@ -634,6 +611,11 @@ which reduction engine to use.  See :ref:`type-cast`.)  For example:
      constant :n:`@qualid` or is the constant used
      in the notation :n:`@string` (see :n:`@reference`)
    - subterms matching a pattern :n:`@one_term`
+
+   .. flag:: SimplIsCbn
+
+      When this :term:`flag` is on, :tacn:`simpl` and `simpl` in
+      :n:`@red_expr` behave as :tacn:`cbn`. Off by default.
 
 .. tacn:: cbn {? @reductions } @simple_occurrences
 
@@ -848,10 +830,10 @@ representation used in the ZINC virtual machine :cite:`Leroy90`. It is
 especially useful for intensive computation of algebraic values, such
 as numbers, and for reflection-based tactics.
 
-:tacn:`native_compute` is based on on converting the Rocq code to OCaml.
+:tacn:`native_compute` is based on converting the Rocq code to OCaml.
 
 Note that both these tactics ignore :cmd:`Opaque` markings
-(see issue `#4776 <https://github.com/coq/coq/issues/4776>`_), nor do they
+(see issue `#4776 <https://github.com/rocq-prover/rocq/issues/4776>`_), nor do they
 apply unfolding strategies such as from :cmd:`Strategy`.
 
 :tacn:`native_compute` is typically two to five
@@ -1002,7 +984,7 @@ which supports additional fine-tuning.
    See Section :ref:`conversion-rules`.
 
    In the particular case where the constants refer to primitive projections,
-   a :token:`!` can be used to make the compatibility constants opaque, while
+   a :n:`!` can be used to make the compatibility constants opaque, while
    by default the projection themselves are made opaque and the compatibility
    constants always remain transparent. This mechanism is only intended for
    debugging purposes.
@@ -1028,7 +1010,7 @@ which supports additional fine-tuning.
    relevant in general.
 
    In the particular case where the constants refer to primitive projections,
-   a :token:`!` can be used to make the compatibility constants transparent
+   a :n:`!` can be used to make the compatibility constants transparent
    (see :cmd:`Opaque` for more details).
 
    .. exn:: The reference @qualid was not found in the current environment.
@@ -1204,4 +1186,4 @@ which supports additional fine-tuning.
       even when used with :tacn:`abstract`, due to the inability of
       tactics to persist information about conversion hints in the
       proof term. See `#12200
-      <https://github.com/coq/coq/issues/12200>`_ for more details.
+      <https://github.com/rocq-prover/rocq/issues/12200>`_ for more details.

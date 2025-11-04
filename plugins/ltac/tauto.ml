@@ -23,7 +23,6 @@ open Proofview.Notations
 module NamedDecl = Context.Named.Declaration
 
 let tauto_plugin = "rocq-runtime.plugins.tauto"
-let () = Mltop.add_known_module tauto_plugin
 
 let assoc_var s ist =
   let v = Id.Map.find (Names.Id.of_string s) ist.lfun in
@@ -284,7 +283,7 @@ let register_tauto_tactic tac name0 args =
   let () = Tacenv.register_ml_tactic name [| tac |] in
   let tac = CAst.make (TacFun (ids, CAst.make (TacML (entry, [])))) in
   let obj () = Tacenv.register_ltac true true (Id.of_string name0) tac in
-  Mltop.declare_cache_obj obj tauto_plugin
+  Mltop.(declare_cache_obj_full (interp_only_obj obj) tauto_plugin)
 
 let () = register_tauto_tactic is_empty "is_empty" ["tauto_flags"; "X1"]
 let () = register_tauto_tactic is_unit_or_eq "is_unit_or_eq" ["tauto_flags"; "X1"]

@@ -25,7 +25,7 @@ Solvers for logic and equality
 
    Moreover, if it has nothing else to do, :tacn:`tauto` performs introductions.
    Therefore, the use of :tacn:`intros` in the previous proof is unnecessary.
-   :tacn:`tauto` can for instance for:
+   :tacn:`tauto` can for instance solve:
 
    .. example::
 
@@ -110,6 +110,19 @@ Solvers for logic and equality
    quantifiers).
 
    Note that this tactic is only available after a ``Require Import Rtauto``.
+
+   .. flag:: Rtauto Check
+
+      Turning this :term:`flag` on checks the produced proof term at tactic
+      time instead of just proof closing (:cmd:`Qed`) time. Mostly
+      useful for debugging failures at proof closing time. Off by default.
+
+   .. flag:: Rtauto Verbose
+
+      Make :tacn:`rtauto` print some debug info while running when on. Off by default.
+
+   .. flag:: Rtauto Pruning
+      :undocumented:
 
 .. tacn:: firstorder {? @ltac_expr } {? using {+, @qualid } } {? with {+ @ident } }
 

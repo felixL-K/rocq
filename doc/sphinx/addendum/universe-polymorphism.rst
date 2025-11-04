@@ -281,7 +281,7 @@ The following is an example of a record with non-trivial subtyping relation:
 
 .. math::
 
-   E[Γ] ⊢ \mathsf{packType}@\{i\} =_{βδιζη}
+   E[Γ] ⊢ \mathsf{packType}@\{i\} ≤_{βδιζη}
    \mathsf{packType}@\{j\}~\mbox{ whenever }~i ≤ j
 
 Looking back at the example of monoids, we can see that they are naturally
@@ -530,15 +530,16 @@ Explicit Universes
    universe_name ::= @qualid
    | Set
    | Prop
-   univ_annot ::= @%{ {* @univ_level_or_quality } {? %| {* @univ_level_or_quality } } %}
-   univ_level_or_quality ::= Set
+   univ_annot ::= @%{ {* @univ_level_or_quality } {? {| %| | ; } {* @univ_level_or_quality } } %}
+   univ_level_or_quality ::= 0
+   | Set
    | SProp
    | Prop
    | Type
    | _
    | @qualid
-   univ_decl ::= @%{ {? {* @ident } %| } {* @ident } {? + } {? %| {*, @univ_constraint } {? + } } %}
-   cumul_univ_decl ::= @%{ {? {* @ident } %| } {* {? {| + | = | * } } @ident } {? + } {? %| {*, @univ_constraint } {? + } } %}
+   univ_decl ::= @%{ {? {* @ident } {| %| | ; } } {* @ident } {? + } {? %| {*, @univ_constraint } {? + } } %}
+   cumul_univ_decl ::= @%{ {? {* @ident } {| %| | ; } } {* {? {| + | = | * } } @ident } {? + } {? %| {*, @univ_constraint } {? + } } %}
    univ_constraint ::= @universe_name {| < | = | <= } @universe_name
 
 The syntax has been extended to allow users to explicitly bind names
@@ -580,7 +581,7 @@ to universes and explicitly instantiate polymorphic definitions.
 .. _printing-universes:
 
 Printing universes
-------------------
+~~~~~~~~~~~~~~~~~~
 
 .. flag:: Printing Universes
 
@@ -605,7 +606,7 @@ Printing universes
    The :n:`Subgraph` clause limits the printed graph to the requested
    names (adjusting constraints to preserve the implied transitive
    constraints between kept universes). :n:`@debug_univ_name` is
-   `:n:`@qualid` for named universes (e.g. `eq.u0`), and :n:`@string`
+   :n:`@qualid` for named universes (e.g. `eq.u0`), and :n:`@string`
    for raw universe expressions (e.g. `"Stdlib.Init.Logic.1"`).
 
    By default when printing a subgraph `Print Universes` attempts to
@@ -707,9 +708,7 @@ underscore or by omitting the annotation to a polymorphic definition.
 
    Turning this :term:`flag` off allows one to freely use
    identifiers for universes without declaring them first, with the
-   semantics that the first use declares it. In this mode, the universe
-   names are not associated with the definition or proof once it has been
-   defined. This is meant mainly for debugging purposes.
+   semantics that the first use declares it. This is meant mainly for debugging purposes.
 
 .. flag:: Private Polymorphic Universes
 
@@ -800,22 +799,30 @@ All sort quality variables must be explicitly bound.
 
 .. rocqtop:: all
 
-   Polymorphic Definition sort@{s | u |} := Type@{s|u}.
+   Polymorphic Definition sort@{s ; u} := Type@{s;u}.
 
-To help the parser, both `|` in the :n:`@univ_decl` are required.
+.. note::
+
+   The following deprecated syntax is equivalent:
+
+   .. rocqtop:: all warn
+
+      Polymorphic Definition sort'@{s | u |} := Type@{s|u}.
+
+   To help the parser, both `|` in the :n:`@univ_decl` are required.
 
 Sort quality variables of a sort polymorphic definition may be
 instantiated by the concrete values `SProp`, `Prop` and `Type` or by a
 bound variable.
 
-Instantiating `s` in `Type@{s|u}` with the impredicative `Prop` or
+Instantiating `s` in `Type@{s;u}` with the impredicative `Prop` or
 `SProp` produces `Prop` or `SProp` respectively regardless of the
-instantiation fof `u`.
+instantiation of `u`.
 
 .. rocqtop:: all
 
-   Eval cbv in sort@{Prop|Set}.
-   Eval cbv in sort@{Type|Set}.
+   Eval cbv in sort@{Prop;Set}.
+   Eval cbv in sort@{Type;Set}.
 
 When no explicit instantiation is provided or `_` is used, a temporary
 variable is generated. Temporary sort variables are instantiated with
@@ -856,7 +863,7 @@ For instance
 
    Set Universe Polymorphism.
 
-   Inductive Squash@{s|u|} (A:Type@{s|u}) : Prop := squash (_:A).
+   Inductive Squash@{s;u} (A:Type@{s;u}) : Prop := squash (_:A).
 
 Elimination to `Prop` and `SProp` is always allowed, so `Squash_ind`
 and `Squash_sind` are automatically defined.
@@ -868,12 +875,12 @@ However elimination to `Type` or to a polymorphic sort with `s := Prop` is allow
 
 .. rocqtop:: all
 
-   Definition Squash_Prop_rect A (P:Squash@{Prop|_} A -> Type)
+   Definition Squash_Prop_rect A (P:Squash@{Prop;_} A -> Type)
      (H:forall x, P (squash _ x))
      : forall s, P s
      := fun s => match s with squash _ x => H x end.
 
-   Definition Squash_Prop_srect@{s|u +|} A (P:Squash@{Prop|_} A -> Type@{s|u})
+   Definition Squash_Prop_srect@{s;u +} A (P:Squash@{Prop;_} A -> Type@{s;u})
      (H:forall x, P (squash _ x))
      : forall s, P s
      := fun s => match s with squash _ x => H x end.
@@ -888,9 +895,17 @@ However elimination to `Type` or to a polymorphic sort with `s := Prop` is allow
    .. rocqtop:: all
 
       Set Primitive Projections.
-      Record sigma@{s|u v|} (A:Type@{s|u}) (B:A -> Type@{s|v})
-        : Type@{s|max(u,v)}
+      Record sigma@{s;u v} (A:Type@{s;u}) (B:A -> Type@{s;v})
+        : Type@{s;max(u,v)}
         := pair { pr1 : A; pr2 : B pr1 }.
+
+.. flag:: Printing Sort Qualities
+
+   By default when :flag:`Printing Universes` is on, sorts at floating
+   sort qualities will print their quality. Turning this :term:`flag` off will
+   instead print them as though the quality was `Type` (which it will
+   become at the end of the definition unless it is unified with
+   another rigid quality).
 
 Explicit Sorts
 ---------------
@@ -933,19 +948,19 @@ Similar to universes, fresh global sorts can be declared with the :cmd:`Sort`.
     Print Sorts.
 
     (* Universe of g-sorted type. *)
-    Definition G@{l|} : Type@{l+1} := Type@{g|l}.
+    Definition G@{l|} : Type@{l+1} := Type@{g;l}.
 
     Section LocalSorts.
       Sort u v w.
 
-      Definition arr2@{l|} (A : Type@{u|l}) (B : Type@{v|l}) (C : Type@{w|l}) : Type@{w|l} :=
+      Definition arr2@{l|} (A : Type@{u;l}) (B : Type@{v;l}) (C : Type@{w;l}) : Type@{w;l} :=
         A -> B -> C.
 
       Print Sorts.
 
       Sort x y.
 
-      Definition arr1@{l|} (X : Type@{x|l}) (Y : Type@{y|l}) : Type@{y|l} :=
+      Definition arr1@{l|} (X : Type@{x;l}) (Y : Type@{y;l}) : Type@{y;l} :=
         X -> Y.
 
       Print Sorts.
@@ -956,7 +971,7 @@ Similar to universes, fresh global sorts can be declared with the :cmd:`Sort`.
     Print Sorts.
 
     (* Equivalent definition of arr2 outside the section LocalSorts. *)
-    Definition arr2'@{u v w | l |} (A : Type@{u|l}) (B : Type@{v|l}) (C : Type@{w|l}) : Type@{w|l} :=
+    Definition arr2'@{u v w ; l |} (A : Type@{u;l}) (B : Type@{v;l}) (C : Type@{w;l}) : Type@{w;l} :=
         A -> B -> C.
 
     (* All sort declarations of the section are bound, even the unused one. *)

@@ -15,7 +15,7 @@ Ltac
    encourage users to use Ltac2 (or other alternatives) instead of Ltac
    for new projects and new automation code in existing projects.
    Reports about hindrances in using Ltac2 for writing automation are
-   welcome as issues on the `Rocq bug tracker <https://github.com/coq/coq/issues>`_
+   welcome as issues on the `Rocq bug tracker <https://github.com/rocq-prover/rocq/issues>`_
    or as discussions on the `Ltac2 Zulip stream <https://coq.zulipchat.com/#narrow/stream/278935-Ltac2>`_.
 
 This chapter documents the tactic language |Ltac|.
@@ -90,19 +90,17 @@ because `||` is part of :token:`ltac_expr2`, which has higher precedence than
 in turn have higher precedence than `;`, which is part of :token:`ltac_expr4`.
 (A *lower* number in the nonterminal name means *higher* precedence in this grammar.)
 
-The constructs in :token:`ltac_expr` are :term:`left associative`.
-
 .. insertprodn ltac_expr tactic_atom
 
 .. prodn::
    ltac_expr ::= @ltac_expr4
-   ltac_expr4 ::= @ltac_expr3 ; @ltac_expr3
-   | @ltac_expr3 ; [ @for_each_goal ]
+   ltac_expr4 ::= @ltac_expr4 ; @ltac_expr3
+   | @ltac_expr4 ; [ @for_each_goal ]
    | @ltac_expr3
    ltac_expr3 ::= @l3_tactic
    | @ltac_expr2
-   ltac_expr2 ::= @ltac_expr1 + @ltac_expr2
-   | @ltac_expr1 %|| @ltac_expr2
+   ltac_expr2 ::= @ltac_expr2 + @ltac_expr2
+   | @ltac_expr2 %|| @ltac_expr2
    | @l2_tactic
    | @ltac_expr1
    ltac_expr1 ::= @tactic_value
@@ -238,6 +236,11 @@ examining the part at the end under "Entry tactic:tactic_value".
         - an untyped term
         - :tacn:`refine`
 
+      * - ``open_constr``
+        - :token:`term`
+        - a term allowing unresolved evars
+        - :tacn:`refine`
+
       * - ``constr``
         - :token:`term`
         - a term
@@ -255,26 +258,30 @@ of the :token:`syn_value`\s can appear at the beginning of an :token:`ltac_expr`
 the others are not useful because they will not evaluate to tactics.)
 
 :n:`uconstr:(@term)` can be used to build untyped terms.
-Terms built in |Ltac| are well-typed by default.  Building large
-terms in recursive |Ltac| functions may give very slow behavior because
-terms must be fully type checked at each step.  In this case, using
-an untyped term may avoid most of the repetitive type checking for the term,
-improving performance.
-
-.. todo above: maybe elaborate on "well-typed by default"
-   see https://github.com/coq/coq/pull/12103#discussion_r436317558
+Terms built in |Ltac| are well-typed by default.
 
 Untyped terms built using :n:`uconstr:(…)` can be used as arguments to the
 :tacn:`refine` tactic, for example. In that case the untyped term is type
 checked against the conclusion of the goal, and the holes which are not solved
 by the typing procedure are turned into new subgoals.
 
+If instead the term was built with `open_constr` before being passed to `refine`,
+it would first be type checked without a type constraint, then coerced to the type of the goal.
+This may lead to different (usually worse) unifications.
+
+Building large terms in recursive |Ltac| functions may give very slow behavior
+because terms built with `constr` (the default for terms passed as arguments to tactics)
+must be fully traversed at each step, producing performance quadratic in the size of the term.
+
+In such cases, using `uconstr` or `open_constr` may avoid most of the repetitive
+type checking for the term, improving performance.
+
 Substitution
 ~~~~~~~~~~~~
 
 .. todo next paragraph: we need a better discussion of substitution.
    Looks like that also applies to binder_tactics in some form.
-   See https://github.com/coq/coq/pull/12103#discussion_r422105218
+   See https://github.com/rocq-prover/rocq/pull/12103#discussion_r422105218
 
 :token:`name`\s within |Ltac| expressions are used to represent both terms and
 |Ltac| variables.  If the :token:`name` corresponds to
@@ -348,7 +355,7 @@ A function application is an expression of the form:
    and with the :cmd:`Ltac` command.
 
    .. todo above: note "gobble" corner case
-      https://github.com/coq/coq/pull/12103#discussion_r436414417
+      https://github.com/rocq-prover/rocq/pull/12103#discussion_r436414417
 
 Tactics in terms
 ~~~~~~~~~~~~~~~~
@@ -392,7 +399,7 @@ behavior.)
    <reordering_goals_ex>`.  If the selector applies
    to a single goal or to all goals, the reordering will not be apparent.  The order of
    the goals in the :token:`goal_selector` is irrelevant.  (This may not be what you expect;
-   see `#8481 <https://github.com/coq/coq/issues/8481>`_.)
+   see `#8481 <https://github.com/rocq-prover/rocq/issues/8481>`_.)
 
    .. todo why shouldn't "all" and "!" be accepted anywhere a @goal_selector is accepted?
       It would be simpler to explain.
@@ -554,27 +561,27 @@ Sequence: ;
 
 A sequence is an expression of the following form:
 
-.. tacn:: @ltac_expr3__1 ; @ltac_expr3__2
+.. tacn:: @ltac_expr4 ; @ltac_expr3
    :name: ltac-seq
 
    .. todo: can't use "… ; …" as the name because of the semicolon
 
-   The expression :n:`@ltac_expr3__1` is evaluated to :n:`v__1`, which must be
+   The expression :n:`@ltac_expr4` is evaluated to :n:`v__1`, which must be
    a tactic value. The tactic :n:`v__1` is applied to the current goals,
    possibly producing more goals. Then the right-hand side is evaluated to
    produce :n:`v__2`, which must be a tactic value. The tactic
    :n:`v__2` is applied to all the goals produced by the prior
-   application. Sequence is associative.
+   application.
 
-   This construct uses backtracking: if :n:`@ltac_expr3__2` fails, Rocq will
-   try each alternative success (if any) for :n:`@ltac_expr3__1`, retrying
-   :n:`@ltac_expr3__2` for each until both tactics succeed or all alternatives
+   This construct uses backtracking: if :n:`@ltac_expr3` fails, Rocq will
+   try each alternative success (if any) for :n:`@ltac_expr4`, retrying
+   :n:`@ltac_expr3` for each until both tactics succeed or all alternatives
    have failed.  See :ref:`branching_and_backtracking`.
 
    .. todo I don't see the distinction between evaluating an ltac expression
       and applying it--how are they not the same thing?  If different, the
       "Semantics" section above should explain it.
-      See https://github.com/coq/coq/pull/12103#discussion_r422210482
+      See https://github.com/rocq-prover/rocq/pull/12103#discussion_r422210482
 
    .. note::
 
@@ -671,8 +678,6 @@ We can branch with backtracking with the following structure:
    no more successes, then `+` similarly evaluates and applies (and backtracks in) the right-hand side.
    To prevent evaluation of further alternatives after an initial success for a tactic, use :tacn:`first` instead.
 
-   `+` is left-associative.
-
    In all cases, :n:`(@ltac_expr__1 + @ltac_expr__2); @ltac_expr__3` is equivalent to
    :n:`(@ltac_expr__1; @ltac_expr__3) + (@ltac_expr__2; @ltac_expr__3)`.
 
@@ -686,8 +691,8 @@ We can branch with backtracking with the following structure:
 
       .. rocqtop:: all
 
-        Fail (fail 2 + idtac) + idtac.
-        Fail fail 2 + (idtac + idtac).
+        Fail (fail 2 + idtac 1) + idtac 2.
+        Fail fail 2 + (idtac 1 + idtac 2).
 
    .. example:: Backtracking branching with +
 
@@ -743,12 +748,12 @@ Local application of tactics: [> ... ]
    Note that :n:`@ltac_expr3 ; [ {*| @ltac_expr} ]` is a convenient idiom to
    process the goals generated by applying :n:`@ltac_expr3`.
 
-.. tacn:: @ltac_expr3 ; [ @for_each_goal ]
+.. tacn:: @ltac_expr4 ; [ @for_each_goal ]
    :name: [ … | … | … ] (dispatch)
 
-   :n:`@ltac_expr3 ; [ ... ]` is equivalent to :n:`[> @ltac_expr3 ; [> ... ] .. ]`.
+   :n:`@ltac_expr4 ; [ ... ]` is equivalent to :n:`[> @ltac_expr4 ; [> ... ] .. ]`.
 
-.. todo see discussion of [ ... ] in https://github.com/coq/coq/issues/12283
+.. todo see discussion of [ ... ] in https://github.com/rocq-prover/rocq/issues/12283
 
 First tactic to succeed
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -838,10 +843,7 @@ structure:
 
    :n:`@ltac_expr1 || @ltac_expr2` is
    equivalent to :n:`first [ progress @ltac_expr1 | @ltac_expr2 ]`, except that
-   if it fails, it fails like :n:`@ltac_expr2. `||` is left-associative.
-
-   :n:`@ltac_expr`\s that don't evaluate to tactic values are ignored.  See the
-   note at :tacn:`solve`.
+   if it fails, it fails like :n:`@ltac_expr2`.
 
 Detecting progress
 ~~~~~~~~~~~~~~~~~~
@@ -1005,7 +1007,7 @@ Soft cut: once
 .. todo Would like a different subsection title above.
    I have trouble distinguishing once and exactly_once.
    We need to explain backtracking somewhere.
-   See https://github.com/coq/coq/pull/12103#discussion_r422360181
+   See https://github.com/rocq-prover/rocq/pull/12103#discussion_r422360181
 
 Another way of restricting backtracking is to restrict a tactic to a
 single success:
@@ -1123,7 +1125,7 @@ Pattern matching on terms: match
       irrelevant terms.  :ref:`Example<match_with_holes_ex>`.
 
       .. todo Didn't understand the following 2 paragraphs well enough to revise
-         see https://github.com/coq/coq/pull/12103#discussion_r436297754 for a
+         see https://github.com/rocq-prover/rocq/pull/12103#discussion_r436297754 for a
          possible example
 
       When a metavariable in the form :n:`?id` occurs under binders,
@@ -1155,7 +1157,7 @@ Pattern matching on terms: match
       :flag:`Printing All` flag).  :ref:`Example<match_term_context_ex>`.
 
    .. todo There's a more realistic example from @JasonGross here:
-      https://github.com/coq/coq/pull/12103#discussion_r432996954
+      https://github.com/rocq-prover/rocq/pull/12103#discussion_r432996954
 
    :n:`@ltac_expr`
       The tactic to apply if the construct matches.  Metavariable values from the pattern
@@ -1345,7 +1347,7 @@ Pattern matching on goals and hypotheses: match goal
          :token:`name` can't have a `?`.  Note that the last two forms are equivalent except that:
 
          - if the `:` in the third form has been bound to something else in a notation, you must use the fourth form.
-           Note that cmd:`Require Import` `ssreflect` loads a notation that does this.
+           Note that :cmd:`Require Import` `ssreflect` loads a notation that does this.
          - a :n:`@term__binder` such as `[ ?l ]` (e.g., denoting a singleton list after
            :cmd:`Import` `ListNotations`) must be parenthesized or, for the fourth form,
            use double brackets: `[ [ ?l ] ]`.
@@ -1956,13 +1958,13 @@ Printing |Ltac| tactics
 Examples of using |Ltac|
 -------------------------
 
-Proof that the natural numbers have at least two elements
+Proof that the natural numbers have at least three elements
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. example:: Proof that the natural numbers have at least two elements
+.. example:: Proof that the natural numbers have at least three elements
 
    The first example shows how to use pattern matching over the proof
-   context to prove that natural numbers have at least two
+   context to prove that natural numbers have at least three
    elements. This can be done as follows:
 
    .. rocqtop:: reset all
@@ -2132,7 +2134,7 @@ tactic language as shown below.
                elim H; intro; clear H
            | H : ?A /\ ?B -> ?C |- _ =>
                cut (A -> B -> C);
-                   [ intro | intros; apply H; split; assumption ]
+                   [ intro; clear H | intros; apply H; split; assumption ]
            | H: ?A \/ ?B -> ?C |- _ =>
                cut (B -> C);
                    [ cut (A -> C);
@@ -2474,6 +2476,13 @@ performance issue.
 
    This :term:`flag` enables and disables the profiler.
 
+.. opt:: Ltac Profiling Cutoff @string
+
+   Reading the string as a floating point number, ltac profiles are
+   printed without entries faster than the cutoff (in seconds).
+
+   `2.0` by default.
+
 .. cmd:: Show Ltac Profile {? {| CutOff @integer | @string } }
 
    Prints the profile.
@@ -2504,7 +2513,7 @@ The following example requires the Stdlib library to use the :tacn:`lia` tactic.
    Ltac mytauto := tauto.
    Ltac tac := intros; repeat split; lia || mytauto.
 
-   Notation max x y := (x + (y - x)) (only parsing).
+   Abbreviation max x y := (x + (y - x)) (only parsing).
 
    Goal forall x y z A B C D E F G H I J K L M N O P Q R S T U V W X Y Z,
        max x (max y z) = max (max x y) z /\ max x (max y z) = max (max x y) z
@@ -2576,5 +2585,5 @@ Run-time optimization tactic
 
 .. cmd:: infoH @ltac_expr
 
-   Used internally by Proof General.  See `#12423 <https://github.com/coq/coq/issues/12423>`_ for
+   Used internally by Proof General.  See `#12423 <https://github.com/rocq-prover/rocq/issues/12423>`_ for
    some background.

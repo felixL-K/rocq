@@ -79,6 +79,8 @@ describes tactics that only apply conversion rules.
 (Other tactics may use conversion rules in addition
 to other changes to the proof state.)
 
+.. _alpha-conversion-sect:
+
 α-conversion
 ~~~~~~~~~~~~
 
@@ -87,6 +89,8 @@ equal ignoring differences in the names of variables bound within the expression
 For example `forall x, x + 0 = x` is α-convertible with `forall y, y + 0 = y`.
 (Internally, Rocq represents these two terms using de Bruijn indices,
 so explicit α-conversion is not necessary.)
+
+.. _beta-reduction-sect:
 
 β-reduction
 ~~~~~~~~~~~
@@ -132,7 +136,7 @@ or :term:`constants <constant>` defined in the :term:`global environment` with t
    \WFE{\Gamma}
    (x:=t:T) ∈ Γ
    --------------
-   E[Γ] ⊢ x~\triangleright_Δ~t
+   E[Γ] ⊢ x~\triangleright_δ~t
 
 .. inference:: Delta-Global
 
@@ -145,6 +149,8 @@ or :term:`constants <constant>` defined in the :term:`global environment` with t
 marked :gdef:`transparent`.  :gdef:`Opaque <opaque>` is the opposite of
 transparent; :term:`delta-reduction` doesn't unfold opaque constants.
 
+.. _iota-reduction-sect:
+
 ι-reduction
 ~~~~~~~~~~~
 
@@ -155,6 +161,8 @@ just says that a destructor applied to an object built from a
 constructor behaves as expected. This reduction is called
 :gdef:`ι-reduction <iota-reduction>`
 and is more precisely studied in :cite:`Moh93,Wer94`.
+
+.. _zeta-reduction-sect:
 
 ζ-reduction
 ~~~~~~~~~~~
@@ -307,7 +315,7 @@ types (differing only in universe levels) such that
 and
 
 .. math::
-   E[Γ] ⊢ c'~v_1' … v_m' : t'~ w_1' … w_m '
+   E[Γ] ⊢ c'~v_1' … v_m' : t~ w_1' … w_m '
 
 and we have
 

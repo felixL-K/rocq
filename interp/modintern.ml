@@ -53,12 +53,12 @@ let lookup_module_or_modtype kind qid =
   try
     if kind == ModType then raise Not_found;
     let mp = Nametab.locate_module qid in
-    Dumpglob.dump_modref ?loc mp "modtype"; (mp,Module)
+    Dumpglob.dump_modref ?loc mp "mod"; (mp,Module)
   with Not_found ->
     try
       if kind == Module then raise Not_found;
       let mp = Nametab.locate_modtype qid in
-      Dumpglob.dump_modref ?loc mp "mod"; (mp,ModType)
+      Dumpglob.dump_modref ?loc mp "modtype"; (mp,ModType)
     with Not_found as exn ->
       let _, info = Exninfo.capture exn in
       error_not_a_module_loc ~info kind loc qid
@@ -81,7 +81,7 @@ let lookup_polymorphism env base kind fqid =
     | [] -> assert false
     | [id] ->
       let test (lab,obj) =
-        match Id.equal (Label.to_id lab) id, obj with
+        match Id.equal lab id, obj with
         | false, _ | _, (SFBrules _ | SFBmodule _ | SFBmodtype _) -> None
         | true, SFBmind mind -> Some (Declareops.inductive_is_polymorphic mind)
         | true, SFBconst const -> Some (Declareops.constant_is_polymorphic const)
@@ -93,7 +93,7 @@ let lookup_polymorphism env base kind fqid =
         | NoFunctor body -> aux body rem
       in
       let test (lab,obj) =
-        match Id.equal (Label.to_id lab) id, obj with
+        match Id.equal lab id, obj with
         | false, _ | _, (SFBrules _ | SFBconst _ | SFBmind _) -> None
         | true, SFBmodule body -> Some (next @@ mod_type body)
         | true, SFBmodtype body ->  (* XXX is this valid? If not error later *)

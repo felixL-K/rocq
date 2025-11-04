@@ -70,14 +70,6 @@ let make_bullet s =
   | '*' -> Star n
   | _ -> assert false
 
-(* For now we just keep the top-level location of the whole
-   vernacular, that is to say, including attributes and control flags;
-   this is not very convenient for advanced clients tho, so in the
-   future it'd be cool to actually locate the attributes and control
-   flags individually too. *)
-let add_control_flag ~loc ~flag { CAst.v = cmd } =
-  CAst.make ~loc { cmd with control = flag :: cmd.control }
-
 let test_hash_ident =
   let open Procq.Lookahead in
   to_entry "test_hash_ident" begin
@@ -99,23 +91,19 @@ let warn_chdir_pwd = CWarnings.create ~name:"change-dir-pwd-deprecated" ~categor
 GRAMMAR EXTEND Gram
   GLOBAL: vernac_control quoted_attributes attribute_list gallina_ext noedit_mode subprf subprf_with_selector qualid;
   vernac_control: FIRST
-    [ [ IDENT "Time"; c = vernac_control ->
-        { add_control_flag ~loc ~flag:ControlTime c }
-      | IDENT "Instructions"; c = vernac_control ->
-        { add_control_flag ~loc ~flag:ControlInstructions c }
-      | IDENT "Profile"; f = OPT STRING; c = vernac_control ->
-        { add_control_flag ~loc ~flag:(ControlProfile f) c }
-      | IDENT "Redirect"; s = ne_string; c = vernac_control ->
-        { add_control_flag ~loc ~flag:(ControlRedirect s) c }
-      | IDENT "Timeout"; n = natural; c = vernac_control ->
-        { add_control_flag ~loc ~flag:(ControlTimeout n) c }
-      | IDENT "Fail"; c = vernac_control ->
-        { add_control_flag ~loc ~flag:ControlFail c }
-      | IDENT "Succeed"; c = vernac_control ->
-        { add_control_flag ~loc ~flag:ControlSucceed c }
-      | v = decorated_vernac ->
-        { let (attrs, expr) = v in CAst.make ~loc { control = []; attrs; expr = expr } } ]
+    [ [ control = LIST0 control_flag; v = decorated_vernac ->
+        { let (attrs, expr) = v in CAst.make ~loc { control; attrs; expr; } } ]
     ]
+  ;
+  control_flag:
+    [ [ IDENT "Time" -> { CAst.make ~loc ControlTime }
+      | IDENT "Instructions" -> { CAst.make ~loc ControlInstructions }
+      | IDENT "Profile"; f = OPT STRING -> { CAst.make ~loc (ControlProfile f) }
+      | IDENT "Redirect"; s = ne_string -> { CAst.make ~loc (ControlRedirect s) }
+      | IDENT "Timeout"; n = natural -> { CAst.make ~loc (ControlTimeout n) }
+      | IDENT "Fail" -> { CAst.make ~loc ControlFail }
+      | IDENT "Succeed" -> { CAst.make ~loc ControlSucceed }
+    ] ]
   ;
   decorated_vernac:
     [ [ a = quoted_attributes ; a' = LIST0 legacy_attr; v = vernac_aux ->
@@ -224,14 +212,18 @@ let test_variance_ident =
     lk_kws ["=";"+";"*"] >> lk_ident
   end
 
-let test_univ_decl =
+let test_doublepipe_univ_decl =
   let open Procq.Lookahead in
-  to_entry "test_univ_decl" (lk_ident_list >> lk_kw "|" >> lk_ident_list >> (lk_kw "+" <+> lk_empty) >> (lk_kw "|" <+> lk_kw "|}"))
+  to_entry "test_doublepipe_univ_decl" (lk_ident_list >> lk_kw "|" >> lk_ident_list >> (lk_kw "+" <+> lk_empty) >> (lk_kw "|" <+> lk_kw "|}"))
 
-let test_cumul_univ_decl =
+let test_doublepipe_cumul_univ_decl =
   let open Procq.Lookahead in
   let lk_list_variance_ident = lk_list (lk_kw "+" <+> lk_kw "*" <+> lk_kw "=" <+> lk_ident) in
-  to_entry "test_cumul_univ_decl" (lk_ident_list >> lk_kw "|" >> lk_list_variance_ident >> (lk_kw "+" <+> lk_empty) >> (lk_kw "|" <+> lk_kw "|}"))
+  to_entry "test_doublepipe_cumul_univ_decl" (lk_ident_list >> lk_kw "|" >> lk_list_variance_ident >> (lk_kw "+" <+> lk_empty) >> (lk_kw "|" <+> lk_kw "|}"))
+
+let test_semicolon_cumul_univ_decl =
+  let open Procq.Lookahead in
+  to_entry "test_semicolon_cumul_univ_decl" (lk_ident_list >> lk_kw ";")
 
 let test_scheme_ident =
   let open Procq.Lookahead in
@@ -350,9 +342,20 @@ GRAMMAR EXTEND Gram
       | ext = [ "}" -> { true } | bar_cbrace -> { false } ] -> { ([], ext) } ] ]
   ;
   univ_decl:
-    [ [ "@{" ; test_univ_decl; l0 = LIST0 identref; "|";  l = LIST0 identref; ext = [ "+" -> { true } | -> { false } ];
+    [ [ "@{" ; test_doublepipe_univ_decl; l0 = LIST0 identref; pipe_loc = [ "|" -> { loc } ];  l = LIST0 identref; ext = [ "+" -> { true } | -> { false } ];
          cs = univ_decl_constraints
          ->
+         { let open UState in
+           G_constr.warn_old_sort_syntax ~loc:pipe_loc ();
+         { univdecl_qualities = l0;
+           univdecl_extensible_qualities = false;
+           univdecl_instance = l;
+           univdecl_extensible_instance = ext;
+           univdecl_constraints = fst cs;
+           univdecl_extensible_constraints = snd cs } }
+    | "@{" ; l0 = LIST0 identref; ";";  l = LIST0 identref; ext = [ "+" -> { true } | -> { false } ];
+        cs = univ_decl_constraints
+        ->
          { let open UState in
          { univdecl_qualities = l0;
            univdecl_extensible_qualities = false;
@@ -386,7 +389,20 @@ GRAMMAR EXTEND Gram
     ] ]
   ;
   cumul_univ_decl:
-    [ [ "@{" ; test_cumul_univ_decl; l0 = LIST0 identref; "|";
+    [ [ "@{" ; test_doublepipe_cumul_univ_decl; l0 = LIST0 identref; pipe_loc = [ "|" -> { loc } ];
+        l = LIST0 variance_identref; ext = [ "+" -> { true } | -> { false } ];
+         cs = univ_decl_constraints
+         ->
+         { let open UState in
+           G_constr.warn_old_sort_syntax ~loc:pipe_loc ();
+         { univdecl_qualities = l0;
+           univdecl_extensible_qualities = false;
+           univdecl_instance = l;
+           univdecl_extensible_instance = ext;
+           univdecl_constraints = fst cs;
+           univdecl_extensible_constraints = snd cs } }
+
+       | "@{" ; test_semicolon_cumul_univ_decl; l0 = LIST0 identref; ";";
         l = LIST0 variance_identref; ext = [ "+" -> { true } | -> { false } ];
          cs = univ_decl_constraints
          ->
@@ -558,7 +574,7 @@ GRAMMAR EXTEND Gram
         rfu_notation } } ] ]
   ;
   record_fields:
-    [ [ f = record_field; ";"; fs = record_fields -> { f :: fs }
+    [ RIGHTA [ f = record_field; ";"; fs = record_fields -> { f :: fs }
       | f = record_field -> { [f] }
       | -> { [] }
     ] ]
@@ -1117,7 +1133,7 @@ GRAMMAR EXTEND Gram
       | IDENT "Grammar"; ents = LIST0 IDENT ->
           (* This should be in "syntax" section but is here for factorization*)
           { PrintGrammar ents }
-      | IDENT "Custom"; IDENT "Grammar"; ent = IDENT ->
+      | IDENT "Custom"; IDENT "Grammar"; ent = qualid ->
           (* Should also be in "syntax" section *)
           { PrintCustomGrammar ent }
       | IDENT "Keywords" ->
@@ -1127,7 +1143,7 @@ GRAMMAR EXTEND Gram
 
       | IDENT "Notation"; ntn = string ->
         { PrintNotation (Constrexpr.InConstrEntry, ntn) }
-      | IDENT "Notation"; ntn = string; IDENT "in"; IDENT "custom"; ent = IDENT ->
+      | IDENT "Notation"; ntn = string; IDENT "in"; IDENT "custom"; ent = qualid ->
         { PrintNotation (Constrexpr.InCustomEntry ent, ntn) }
 
       | IDENT "ML"; IDENT "Path" -> { PrintMLLoadPath }
@@ -1265,7 +1281,7 @@ GRAMMAR EXTEND Gram
       | IDENT "headconcl" -> { InConcl, true } ] ]
   ;
   search_queries:
-    [ [ m = ne_in_or_out_modules -> { ([],m) }
+    [ RIGHTA [ m = ne_in_or_out_modules -> { ([],m) }
       | s = search_query; l = search_queries ->
         { let (sl,m) = l in (s::sl,m) }
       | -> { ([],SearchOutside []) }
@@ -1302,7 +1318,7 @@ GRAMMAR EXTEND Gram
 
 (* factorized here, though relevant for syntax extensions *)
 
-      | IDENT "Declare"; IDENT "Custom"; IDENT "Entry"; s = IDENT ->
+      | IDENT "Declare"; IDENT "Custom"; IDENT "Entry"; s = ident ->
            { VernacSynterp (VernacDeclareCustomEntry s) }
 
  ] ];
@@ -1330,10 +1346,13 @@ GRAMMAR EXTEND Gram
 
      | IDENT "Infix"; ntn_decl = notation_declaration ->
          { VernacSynterp (VernacNotation (true,ntn_decl)) }
-     | IDENT "Notation"; id = identref; idl = LIST0 ident;
+     | lnot = located_notation; id = identref; idl = LIST0 ident;
          ":="; c = constr; modl = syntax_modifiers ->
-           { VernacSynPure (VernacSyntacticDefinition (id,(idl,c), modl)) }
-     | IDENT "Notation"; ntn_decl = notation_declaration ->
+           { VernacSynPure (VernacAbbreviation (id,(idl,c), modl, Some lnot)) }
+     | IDENT "Abbreviation"; id = identref; idl = LIST0 ident;
+         ":="; c = constr; modl = syntax_modifiers ->
+           { VernacSynPure (VernacAbbreviation (id,(idl,c), modl, None)) }
+     | located_notation; ntn_decl = notation_declaration ->
            { VernacSynterp (VernacNotation (false,ntn_decl)) }
 
      | IDENT "Reserved"; IDENT "Infix"; s = ne_lstring; l = syntax_modifiers ->
@@ -1349,6 +1368,9 @@ GRAMMAR EXTEND Gram
      (* "Print" "Grammar" and "Declare" "Scope" should be here but are in "command" entry in order
         to factorize with other "Print"-based or "Declare"-based vernac entries *)
   ] ]
+  ;
+  located_notation:
+    [ [ IDENT "Notation" -> { loc } ] ]
   ;
   enable_enable_disable:
     [ [ IDENT "Enable" -> { true }
@@ -1371,8 +1393,8 @@ GRAMMAR EXTEND Gram
     [ [ IDENT "all" -> { EnableNotationAll }
       | IDENT "only"; IDENT "parsing" -> { EnableNotationOnly Notationextern.OnlyParsing }
       | IDENT "only"; IDENT "printing" -> { EnableNotationOnly Notationextern.OnlyPrinting }
-      | "in"; IDENT "custom"; x = identref -> { EnableNotationEntry CAst.(make ?loc:x.loc (InCustomEntry (Id.to_string x.v))) }
-      | "in"; IDENT "constr" -> { EnableNotationEntry (CAst.make ~loc InConstrEntry) } ] ]
+      | "in"; IDENT "custom"; x = qualid -> { EnableNotationEntry (InCustomEntry x) }
+      | "in"; IDENT "constr" -> { EnableNotationEntry InConstrEntry } ] ]
   ;
   opt_scope:
     [ [ ":"; sc = IDENT -> { Some (NotationInScope sc) }
@@ -1385,8 +1407,8 @@ GRAMMAR EXTEND Gram
   ;
   syntax_modifier:
     [ [ "at"; IDENT "level"; n = natural -> { SetLevel n }
-      | "in"; IDENT "custom"; x = IDENT -> { SetCustomEntry (x,None) }
-      | "in"; IDENT "custom"; x = IDENT; "at"; IDENT "level"; n = natural ->
+      | "in"; IDENT "custom"; x = qualid -> { SetCustomEntry (x,None) }
+      | "in"; IDENT "custom"; x = qualid; "at"; IDENT "level"; n = natural ->
          { SetCustomEntry (x,Some n) }
       | IDENT "left"; IDENT "associativity" -> { SetAssoc Gramlib.Gramext.LeftA }
       | IDENT "right"; IDENT "associativity" -> { SetAssoc Gramlib.Gramext.RightA }
@@ -1422,7 +1444,7 @@ GRAMMAR EXTEND Gram
       | IDENT "strict"; IDENT "pattern" -> { ETPattern (true,None) }
       | IDENT "strict"; IDENT "pattern"; "at"; IDENT "level"; n = natural -> { ETPattern (true,Some n) }
       | IDENT "closed"; IDENT "binder" -> { ETBinder false }
-      | IDENT "custom"; x = IDENT; n = at_level_opt; b = OPT binder_interp ->
+      | IDENT "custom"; x = qualid; n = at_level_opt; b = OPT binder_interp ->
            { ETConstr (InCustomEntry x,b,n) }
     ] ]
   ;

@@ -139,10 +139,10 @@ let rec prod_item_of_symbol lev = function
   EntryName (Rawwit (ListArg typ), Procq.Symbol.list0 e)
 | Extend.Ulist1sep (s, sep) ->
   let EntryName (Rawwit typ, e) = prod_item_of_symbol lev s in
-  EntryName (Rawwit (ListArg typ), Procq.Symbol.list1sep e (Procq.Symbol.tokens [Procq.TPattern (Procq.terminal sep)]) false)
+  EntryName (Rawwit (ListArg typ), Procq.Symbol.list1sep e (Procq.Symbol.tokens [Procq.TPattern (Procq.terminal sep)]))
 | Extend.Ulist0sep (s, sep) ->
   let EntryName (Rawwit typ, e) = prod_item_of_symbol lev s in
-  EntryName (Rawwit (ListArg typ), Procq.Symbol.list0sep e (Procq.Symbol.tokens [Procq.TPattern (Procq.terminal sep)]) false)
+  EntryName (Rawwit (ListArg typ), Procq.Symbol.list0sep e (Procq.Symbol.tokens [Procq.TPattern (Procq.terminal sep)]))
 | Extend.Uopt s ->
   let EntryName (Rawwit typ, e) = prod_item_of_symbol lev s in
   EntryName (Rawwit (OptArg typ), Procq.Symbol.opt e)
@@ -395,9 +395,9 @@ let extend_atomic_tactic name entries =
   in
   List.iteri add_atomic entries
 
-let add_ml_tactic_notation name ~level ?deprecation prods =
+let synterp_add_ml_tactic_notation name ~level ?deprecation prods =
   let len = List.length prods in
-  let iter i prods =
+  let map i prods =
     let open Tacexpr in
     let get_id = function
     | TacTerm s -> None
@@ -408,12 +408,17 @@ let add_ml_tactic_notation name ~level ?deprecation prods =
     let map id = Reference (Locus.ArgVar (CAst.make id)) in
     let tac = CAst.make (TacML (entry, List.map map ids)) in
     let tacobj = add_glob_tactic_notation_syntax false ~level ?deprecation prods true in
-    add_glob_tactic_notation ?deprecation tacobj ids tac
+    tacobj, { Tacenv.alias_args = ids; alias_body = tac; alias_deprecation = deprecation }
   in
-  List.iteri iter (List.rev prods);
+  let for_interp = List.mapi map (List.rev prods) in
+  name, level, prods, for_interp
+
+let interp_add_ml_tactic_notation (name, level, prods, data) =
+  List.iter (fun o -> Lib.add_leaf (inTacticGrammar o)) data;
   (* We call [extend_atomic_tactic] only for "basic tactics" (the ones
      at ltac_expr level 0) *)
-  if Int.equal level 0 then extend_atomic_tactic name prods
+  let () = if Int.equal level 0 then extend_atomic_tactic name prods in
+  ()
 
 (**********************************************************************)
 (** Ltac quotations                                                   *)
@@ -528,7 +533,7 @@ let register_ltac atts = function
 (** Queries *)
 
 let print_ltacs () =
-  let entries = KNmap.bindings (Tacenv.ltac_entries ()) in
+  let entries = KerName.Map.bindings (Tacenv.ltac_entries ()) in
   let sort (kn1, _) (kn2, _) = KerName.compare kn1 kn2 in
   let entries = List.sort sort entries in
   let map (kn, entry) =
@@ -565,7 +570,9 @@ let print_ltac_body qid tac =
   | mods ->
     let pr_one mp =
       let qid = try Nametab.shortest_qualid_of_module mp
-        with Not_found -> Nametab.shortest_qualid_of_dir (Libnames.path_of_string (ModPath.to_string mp))
+        with Not_found ->
+        try Nametab.shortest_qualid_of_dir (DirOpenModule mp)
+        with Not_found -> Nametab.shortest_qualid_of_dir (DirOpenModtype mp)
       in
       pr_qualid qid
     in
@@ -586,7 +593,7 @@ let () =
   let name (qid,kn) = str "Ltac" ++ spc () ++ pr_path (Tacenv.path_of_tactic kn) in
   let print (qid,kn) =
     let entries = Tacenv.ltac_entries () in
-    let tac = KNmap.find kn entries in
+    let tac = KerName.Map.find kn entries in
     print_ltac_body qid tac in
   let about = name in
   register_locatable locatable_ltac {
@@ -605,7 +612,7 @@ let print_ltac id =
  try
   let kn = Tacenv.locate_tactic id in
   let entries = Tacenv.ltac_entries () in
-  let tac = KNmap.find kn entries in
+  let tac = KerName.Map.find kn entries in
   print_ltac_body id tac
  with
   Not_found ->
@@ -738,11 +745,14 @@ let tactic_extend plugin_name tacname ~level ?deprecation sign =
     let id = Names.Id.of_string name in
     let obj () = Tacenv.register_ltac true false id body ?deprecation in
     let () = Tacenv.register_ml_tactic ml_tactic_name [|tac|] in
-    Mltop.declare_cache_obj obj plugin_name
+    Mltop.(declare_cache_obj_full (interp_only_obj obj) plugin_name)
   | _ ->
-  let obj () = add_ml_tactic_notation ml_tactic_name ~level ?deprecation (List.map clause_of_ty_ml sign) in
-  Tacenv.register_ml_tactic ml_tactic_name @@ Array.of_list (List.map eval sign);
-  Mltop.declare_cache_obj obj plugin_name
+    let synterp () =
+      synterp_add_ml_tactic_notation ml_tactic_name ~level ?deprecation (List.map clause_of_ty_ml sign)
+    in
+    let interp = interp_add_ml_tactic_notation in
+    Tacenv.register_ml_tactic ml_tactic_name @@ Array.of_list (List.map eval sign);
+    Mltop.declare_cache_obj_full (CacheObj {synterp; interp}) plugin_name
 
 type (_, 'a) ml_ty_sig =
 | MLTyNil : ('a, 'a) ml_ty_sig
@@ -778,7 +788,7 @@ let ml_tactic_extend ~plugin ~name ~local ?deprecation sign tac =
   let id = Names.Id.of_string name in
   let obj () = Tacenv.register_ltac true local id body ?deprecation in
   let () = Tacenv.register_ml_tactic ml_tactic_name [|tac|] in
-  Mltop.declare_cache_obj obj plugin
+  Mltop.(declare_cache_obj_full (interp_only_obj obj) plugin)
 
 module MLName =
 struct
@@ -848,7 +858,7 @@ let ml_val_tactic_extend ~plugin ~name ~local ?deprecation sign tac =
   let obj () = Tacenv.register_ltac true local id body ?deprecation in
   let () = assert (not @@ MLTacMap.mem ml_tactic_name !ml_table) in
   let () = ml_table := MLTacMap.add ml_tactic_name tac !ml_table in
-  Mltop.declare_cache_obj obj plugin
+  Mltop.(declare_cache_obj_full (interp_only_obj obj) plugin)
 
 (** ARGUMENT EXTEND *)
 
@@ -933,7 +943,7 @@ let argument_extend (type a b c) ~plugin ~name (arg : (a, b, c) tactic_argument)
   | Vernacextend.Arg_rules rules ->
     let e = Procq.create_generic_entry2 name (Genarg.rawwit wit) in
     let plugin_uid = (plugin, "argextend:"^name) in
-    let () = Egramml.grammar_extend ~plugin_uid e (Procq.Fresh (Gramlib.Gramext.First, [None, None, rules])) in
+    let () = Egramml.grammar_extend ~plugin_uid e (Procq.Fresh (Gramlib.Gramext.First, [None, Some RightA, rules])) in
     e
   in
   let (rpr, gpr, tpr) = arg.arg_printer in

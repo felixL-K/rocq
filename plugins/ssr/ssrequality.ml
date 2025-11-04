@@ -315,9 +315,7 @@ let unfoldintac occ rdx t (kt,_) =
         with e when CErrors.noncritical e -> errorstrm Pp.(str "The term " ++
           pr_econstr_env env sigma c ++spc()++ str "does not unify with " ++ pr_econstr_pat env sigma t)),
     ignore in
-  let concl =
-    try beta env0 (eval_pattern env0 sigma0 concl0 rdx occ unfold)
-    with Option.IsNone -> errorstrm Pp.(str"Failed to unfold " ++ pr_econstr_pat env0 sigma t) in
+  let concl = beta env0 (eval_pattern env0 sigma0 concl0 rdx occ unfold) in
   let () = conclude () in
   convert_concl ~check:true concl
   end
@@ -395,18 +393,22 @@ let pirrel_rewrite ?(under=false) ?(map_redex=id_map_redex) pred rdx rdx_ty new_
     | None ->
       let ((kn, i) as ind, _) = Tacred.eval_to_quantified_ind env sigma c_ty in
       let sort = Tacticals.elimination_sort_of_goal gl in
-      let sigma, elim = Evd.fresh_global env sigma (Indrec.lookup_eliminator env ind sort) in
+      let sigma, elim = Evd.fresh_global env sigma (Elimschemes.lookup_eliminator env ind sort) in
       if dir = R2L then sigma, elim else
       let elim, _ = EConstr.destConst sigma elim in
       let mp,l = KerName.repr (Constant.canonical elim) in
-      let l' = Label.of_id (Nameops.add_suffix (Label.to_id l) "_r")  in
+      let l' = Nameops.add_suffix l "_r"  in
       let c1' = Global.constant_of_delta_kn (Constant.canonical (Constant.make2 mp l')) in
       Evd.fresh_global env sigma (ConstRef c1')
   in
   (* The resulting goal *)
   let evty = beta (EConstr.Vars.subst1 new_rdx pred) in
-  let typeclass_candidate = Typeclasses.is_maybe_class_type sigma evty in
-  let sigma, p = Evarutil.new_evar ~typeclass_candidate env sigma evty in
+  let typeclass_candidate = Typeclasses.is_maybe_class_type env sigma evty in
+  let sigma, p =
+    Evarutil.new_evar ~typeclass_candidate
+      ~relevance:(Retyping.relevance_of_type env sigma evty)
+      env sigma evty
+  in
   (* We check the proof is well typed. We assume that the type of [elim] is of
      the form [forall (A : Type) (x : A) (P : A -> Type@{s}), T] s.t. the only
      universes to unify are by checking the [A] and [P] arguments. *)
@@ -578,7 +580,7 @@ let rwprocess_rule env dir rule =
       match EConstr.kind sigma t with
       | Prod (_, xt, at) ->
         let sigma = Evd.create_evar_defs sigma in
-        let typeclass_candidate = Typeclasses.is_maybe_class_type sigma xt in
+        let typeclass_candidate = Typeclasses.is_maybe_class_type env sigma xt in
         let (sigma, x) = Evarutil.new_evar ~typeclass_candidate env sigma xt in
         loop d sigma EConstr.(mkApp (r, [|x|])) (EConstr.Vars.subst1 x at) rs 0
       | App (pr, a) when is_ind_ref env sigma pr prod_type ->

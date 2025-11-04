@@ -1,9 +1,5 @@
 :orphan:
 
-.. hack to get index in TOC
+.. raw:: html
 
-.. _attribute_index:
-
----------------
-Attribute index
----------------
+   <meta http-equiv="refresh" content="0;URL=rocq-attrindex.html">

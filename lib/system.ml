@@ -155,10 +155,7 @@ let file_exists_respecting_case path f =
     && exists_in_dir_respecting_case (Filename.concat path df) bf
   in (!trust_file_cache || Sys.file_exists (Filename.concat path f)) && aux f
 
-let rec search paths test =
-  match paths with
-  | [] -> []
-  | lpe :: rem -> test lpe @ search rem test
+let search paths test = List.concat_map test paths
 
 let warn_ambiguous_file_name =
   CWarnings.create ~name:"ambiguous-file-name" ~category:CWarnings.CoreCategories.filesystem
@@ -423,6 +420,6 @@ let fmt_instructions_result r =
 let get_toplevel_path top =
   let open Filename in
   let dir = if String.equal (basename Sys.argv.(0)) Sys.argv.(0)
-            then "" else dirname Sys.argv.(0) ^ dir_sep in
+            then Boot.Env.rocqbin ^ dir_sep else dirname Sys.argv.(0) ^ dir_sep in
   let exe = if Sys.(os_type = "Win32" || os_type = "Cygwin") then ".exe" else "" in
   dir ^ top ^ exe

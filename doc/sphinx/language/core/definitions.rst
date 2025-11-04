@@ -40,10 +40,10 @@ Type cast
 .. insertprodn term_cast term_cast
 
 .. prodn::
-   term_cast ::= @term10 : @type
-   | @term10 <: @type
-   | @term10 <<: @type
-   | @term10 :> @type
+   term_cast ::= @term100 <: @type
+   | @term100 <<: @type
+   | @term100 :> @type
+   | @term100 : @type
 
 The expression :n:`@term10 : @type` is a type cast expression. It enforces
 the type of :n:`@term10` to be :n:`@type`.
@@ -137,7 +137,7 @@ Assertions and proofs
 An assertion states a proposition (or a type) for which the proof (or an
 inhabitant of the type) is interactively built using :term:`tactics <tactic>`.
 Assertions cause Rocq to enter :term:`proof mode` (see :ref:`proofhandling`).
-Common tactics are described in the :ref:`writing-proofs` chapter.
+Common tactics are described in the :ref:`tactics` chapter.
 The basic assertion command is:
 
 .. cmd:: @thm_token @ident_decl {* @binder } : @type {* with @ident_decl {* @binder } : @type }
@@ -192,6 +192,7 @@ The basic assertion command is:
 
    .. exn:: Nested proofs are discouraged and not allowed by default. This error probably means that you forgot to close the last "Proof." with "Qed." or "Defined.". \
             If you really intended to use nested proofs, you can do so by turning the "Nested Proofs Allowed" flag on.
+      :name: Nested proofs are discouraged and not allowed by default
 
       You are asserting a new statement when you're already in proof mode.
       This feature, called nested proofs, is disabled by default.
@@ -199,7 +200,7 @@ The basic assertion command is:
 
 Proofs start with the keyword :cmd:`Proof`. Then Rocq enters the proof mode
 until the proof is completed. In proof mode, the user primarily enters
-tactics (see :ref:`writing-proofs`). The user may also enter
+tactics (see :ref:`tactics`). The user may also enter
 commands to manage the proof mode (see :ref:`proofhandling`).
 
 When the proof is complete, use the :cmd:`Qed` command so the kernel verifies

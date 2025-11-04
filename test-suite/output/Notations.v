@@ -1,7 +1,7 @@
 (* Bug 5568, don't warn for notations in repeated module import *)
 
 Module foo.
-Notation compose := (fun g f => g f).
+Abbreviation compose := (fun g f => g f).
 Notation "g & f" := (compose g f) (at level 10).
 End foo.
 
@@ -70,17 +70,17 @@ Check (1;2,4).
 Section C.
 
 Notation "'ifzero' n" := (match n with 0 => true | S _ => false end)
-  (at level 0, n at level 0).
+  (at level 2, n at level 0).
 Check (ifzero 3).
 
 Notation "'pred' n" := (match n with 0 => 0 | S n' => n' end)
-  (at level 0, n at level 0).
+  (at level 2, n at level 0).
 Check (pred 3).
 Check (fun n => match n with 0 => 0 | S n => n end).
 Check (fun n => match n with S p as x => p | _ => 0 end).
 
 Notation "'ifn' x 'is' 'succ' n 'then' t 'else' u" :=
-  (match x with O => u | S n => t end) (at level 0, u at level 0).
+  (match x with O => u | S n => t end) (at level 2, u at level 0).
 Check fun x => ifn x is succ n then n else 0.
 
 End C.
@@ -126,23 +126,23 @@ Fail Notation "( x , y , .. , z )" := (pair .. (pair (pair y z) x) .. x).
 (**********************************************************************)
 (* Check preservation of scopes at printing time *)
 
-Notation SUM := sum.
+Abbreviation SUM := sum.
 Check SUM (nat*nat) nat.
 
 (**********************************************************************)
 (* Check preservation of implicit arguments at printing time *)
 
-Notation FST := fst.
+Abbreviation FST := fst.
 Check FST (0;1).
 
 (**********************************************************************)
 (* Check notations for references with activated or deactivated       *)
 (* implicit arguments                                                 *)
 
-Notation Nil := @nil.
+Abbreviation Nil := @nil.
 Check Nil.
 
-Notation NIL := nil.
+Abbreviation NIL := nil.
 Check NIL : list nat.
 
 
@@ -200,19 +200,19 @@ End Application.
 
 (* Check notations in cases patterns *)
 
-Notation SOME := Some.
-Notation NONE := None.
+Abbreviation SOME := Some.
+Abbreviation NONE := None.
 Check (fun x => match x with SOME x => x | NONE => 0 end).
 
-Notation NONE2 := (@None _).
-Notation SOME2 := (@Some _).
+Abbreviation NONE2 := (@None _).
+Abbreviation SOME2 := (@Some _).
 Check (fun x => match x with SOME2 x => x | NONE2 => 0 end).
 
-Notation NONE3 := @None.
-Notation SOME3 := @Some.
+Abbreviation NONE3 := @None.
+Abbreviation SOME3 := @Some.
 Check (fun x => match x with SOME3 _ x => x | NONE3 _ => 0 end).
 
-Notation "a :'" := (cons a) (at level 12).
+Notation "a :'" := (cons a) (at level 1).
 
 Check (fun x => match x with | nil => NONE | h :' t => SOME3 _ t end).
 
@@ -221,7 +221,7 @@ Check (fun x => match x with | nil => NONE | h :' t => SOME3 _ t end).
    universe than the actual one; but it would be the same anyway
    without a notation *)
 
-Notation s := Type.
+Abbreviation s := Type.
 Check s.
 
 (* Test bug #2835: notations were not uniformly managed under prod and lambda *)

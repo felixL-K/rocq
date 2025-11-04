@@ -120,7 +120,7 @@ Function application
 .. insertprodn term_application arg
 
 .. prodn::
-   term_application ::= @term1 {+ @arg }
+   term_application ::= @term10 {+ @arg }
    | @ @qualid_annotated {+ @term1 }
    arg ::= ( @ident := @term )
    | ( @natural := @term )
@@ -129,7 +129,7 @@ Function application
 :n:`@term1__fun @term1` denotes applying the function :n:`@term1__fun` to :token:`term1`.
 
 .. todo: What is the relevant definition of a function here?
-         See https://github.com/coq/coq/pull/16659#discussion_r1039540851
+         See https://github.com/rocq-prover/rocq/pull/16659#discussion_r1039540851
 
 :n:`@term1__fun {+ @term1__i }` denotes applying
 :n:`@term1__fun` to the arguments :n:`@term1__i`.  It is
@@ -184,9 +184,6 @@ has type :n:`@type`.
    which makes the declared :n:`@ident` accessible only through their fully
    qualified names, even if :cmd:`Import` or its variants has been used on the
    current module.
-
-   which makes the defined :n:`@ident`\s accessible by :cmd:`Import` and its variants
-   only through their fully qualified names.
 
    Similarly, :cmd:`Hypothesis`, :cmd:`Variable` and their plural forms are equivalent.
    They should only be used inside :ref:`section-mechanism`. The

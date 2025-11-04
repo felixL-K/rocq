@@ -143,7 +143,7 @@ let with_section_locality ~atts f =
 let show_proof ~pstate =
   (* spiwack: this would probably be cooler with a bit of polishing. *)
   try
-    let pstate = Option.get pstate in
+    let pstate = match pstate with None -> raise Exit | Some s -> s in
     let p = Declare.Proof.get pstate in
     let sigma, _ = Declare.Proof.get_current_context pstate in
     let pprf = Proof.partial_proof p in
@@ -156,8 +156,7 @@ let show_proof ~pstate =
     Pp.prlist_with_sep Pp.fnl (Printer.pr_econstr_env env sigma) pprf
   (* We print nothing if there are no goals left *)
   with
-  | Proof.NoSuchGoal _
-  | Option.IsNone ->
+  | Proof.NoSuchGoal _ | Exit ->
     user_err (str "No goals to show.")
 
 let show_top_evars ~proof =
@@ -214,7 +213,7 @@ let print_loadpath dir =
     let filter p = is_dirpath_prefix_of dir (Loadpath.logical p) in
     List.filter filter l
   in
-  str "Logical Path / Physical path:" ++ fnl () ++
+  str "Installed / Logical Path / Physical path:" ++ fnl () ++
     prlist_with_sep fnl Loadpath.pp l
 
 let print_libraries () =
@@ -258,8 +257,7 @@ let print_namespace ~pstate ns =
   let rec match_modulepath ns = function
     | MPbound _ -> None (* Not a proper namespace. *)
     | MPfile dir -> match_dirpath ns (Names.DirPath.repr dir)
-    | MPdot (mp,lbl) ->
-        let id = Names.Label.to_id lbl in
+    | MPdot (mp,id) ->
         begin match match_modulepath ns mp with
         | Some [] as y -> y
         | Some (a::ns') ->
@@ -278,14 +276,14 @@ let print_namespace ~pstate ns =
     let rec list_of_modulepath = function
       | MPbound _ -> assert false (* MPbound never matches *)
       | MPfile dir -> Names.DirPath.repr dir
-      | MPdot (mp,lbl) -> (Names.Label.to_id lbl)::(list_of_modulepath mp)
+      | MPdot (mp,lbl) -> lbl::(list_of_modulepath mp)
     in
     snd (Util.List.chop n (List.rev (list_of_modulepath mp)))
   in
   let print_list pr l = prlist_with_sep (fun () -> str".") pr l in
   let print_kn kn =
     let (mp,lbl) = Names.KerName.repr kn in
-    let qn = (qualified_minus (List.length ns) mp)@[Names.Label.to_id lbl] in
+    let qn = (qualified_minus (List.length ns) mp)@[lbl] in
     print_list Id.print qn
   in
   let print_constant ~pstate k body =
@@ -363,7 +361,7 @@ let print_registered_schemes () =
     pr_global (ConstRef c) ++ str " registered as " ++ str kind ++ str " for " ++ pr_global (IndRef ind)
   in
   let pr_schemes_of_ind (ind, schemes) =
-    let tmp = UnivGen.Map.bindings schemes in
+    let tmp = DeclareScheme.Key.Map.bindings schemes in
     let tmpp = List.map (fun ((a,c,d),b) ->
         (* /!\ will print 2 times if both individual and mutual (represented by bool d here) are defined for a given scheme *)
         let s1 = String.concat " " a in
@@ -374,7 +372,7 @@ let print_registered_schemes () =
         ((s1 ^ s2),b)) tmp in
     prlist_with_sep fnl (pr_one_scheme ind) tmpp
   in
-  hov 0 (prlist_with_sep fnl pr_schemes_of_ind (Indmap.bindings schemes))
+  hov 0 (prlist_with_sep fnl pr_schemes_of_ind (Indmap_env.bindings schemes))
 
 let dump_universes output g =
   let open Univ in
@@ -563,7 +561,7 @@ let mk_sources () =
   let edges =
     let libs = Library.loaded_libraries () in
     List.fold_left (fun edges dp ->
-        let _, csts = Safe_typing.univs_of_library @@ Library.library_compiled dp in
+        let _, (_, csts) = Safe_typing.univs_of_library @@ Library.library_compiled dp in
         Constraints.fold (fun cst edges -> add_edge cst (Library dp) edges)
           csts edges)
       edges libs
@@ -768,8 +766,8 @@ let interp_enable_notation_rule on ntn interp flags scope =
     | Inr (vars,qid) -> Inr qid) ntn in
   let rec parse_notation_enable_flags all query = function
     | [] -> all, query
-    | EnableNotationEntry CAst.{loc;v=entry} :: flags ->
-      (match entry with InCustomEntry s when not (Egramrocq.exists_custom_entry s) -> user_err ?loc (str "Unknown custom entry.") | _ -> ());
+    | EnableNotationEntry entry :: flags ->
+      let entry = Metasyntax.intern_notation_entry entry in
       parse_notation_enable_flags all { query with notation_entry_pattern = entry :: query.notation_entry_pattern } flags
     | EnableNotationOnly use :: flags ->
       parse_notation_enable_flags all { query with use_pattern = use } flags
@@ -932,10 +930,14 @@ let vernac_end_proof ~lemma ~pm = let open Vernacexpr in function
 
 let vernac_abort ~lemma:_ ~pm = pm
 
+let deprecated_exact_proof = CWarnings.create ~name:"deprecated-exact-proof" ~category:Deprecation.Version.v9_2
+    Pp.(fun () -> str "\"Proof term.\" is deprecated. Use \"Proof. exact term. Qed.\" instead.")
+
 let vernac_exact_proof ~lemma ~pm c =
+  deprecated_exact_proof ();
   (* spiwack: for simplicity I do not enforce that "Proof proof_term" is
      called only at the beginning of a proof. *)
-  let lemma, status = Declare.Proof.by (Tactics.exact_proof c) lemma in
+  let lemma, status = Declare.Proof.by (Global.env ()) (Tactics.exact_proof c) lemma in
   let pm, _ = Declare.Proof.save ~pm ~proof:lemma ~opaque:Opaque ~idopt:None in
   if not status then Feedback.feedback Feedback.AddedAxiom;
   pm
@@ -1085,6 +1087,64 @@ module Preprocessed_Mind_decl = struct
     | Inductive of inductive
 end
 
+(* Intermediate type while parsing record field flags *)
+type record_field_attr = {
+  rf_coercion: coercion_flag; (* the projection is an implicit coercion *)
+  rf_reversible: bool option; (* coercion is reversible, if relevant *)
+  rf_instance: instance_flag; (* the projection is an instance *)
+  rf_priority: int option; (* priority of the instance, if relevant *)
+  rf_locality: Goptions.option_locality; (* locality of coercion and instance *)
+  rf_canonical: bool; (* use this projection in the search for canonical instances *)
+}
+
+let check_proj_flags rf =
+  let open Vernacexpr in
+  let open Record.Data in
+  let () = match rf.rf_coercion, rf.rf_instance with
+    | NoCoercion, NoInstance ->
+      if rf.rf_locality <> Goptions.OptDefault then
+        Attributes.(unsupported_attributes
+                      [CAst.make ("locality (without :> or ::)",VernacFlagEmpty)])
+    | AddCoercion, NoInstance ->
+      if rf.rf_locality = Goptions.OptExport then
+        Attributes.(unsupported_attributes
+                      [CAst.make ("export (without ::)",VernacFlagEmpty)])
+    | _ -> ()
+  in
+  let pf_coercion =
+    match rf.rf_coercion with
+    | AddCoercion ->
+      Some {
+        coe_local = rf.rf_locality = OptLocal;
+        coe_reversible = Option.default true rf.rf_reversible;
+      }
+    | NoCoercion ->
+      if rf.rf_reversible <> None then
+        Attributes.(unsupported_attributes
+                      [CAst.make ("reversible (without :>)",VernacFlagEmpty)]);
+      None
+  in
+  let pf_instance =
+    match rf.rf_instance with
+    | NoInstance ->
+      let () = if Option.has_some rf.rf_priority then
+          CErrors.user_err Pp.(str "Priority not allowed without \"::\".")
+      in
+      None
+    | BackInstance ->
+      let local =
+        match rf.rf_locality with
+        | Goptions.OptLocal -> Hints.Local
+        | Goptions.(OptDefault | OptExport) -> Hints.Export
+        | Goptions.OptGlobal -> Hints.SuperGlobal
+      in
+      Some {
+        inst_locality = local;
+        inst_priority = rf.rf_priority;
+      }
+  in
+  { pf_coercion; pf_instance; pf_canonical = rf.rf_canonical }
+
 let preprocess_defclass ~atts udecl (id, bl, c, l) =
   let poly, mode =
     Attributes.(parse Notations.(polymorphic ++ mode_attr) atts)
@@ -1105,10 +1165,14 @@ let preprocess_defclass ~atts udecl (id, bl, c, l) =
   let ((attr, rf_coercion, rf_instance), (lid, ce)) = l in
   let rf_locality = match rf_coercion, rf_instance with
     | AddCoercion, _ | _, BackInstance -> parse option_locality attr
-    | _ -> let () = unsupported_attributes attr in Goptions.OptDefault in
+    | _ -> let () = unsupported_attributes attr in Goptions.OptDefault
+  in
   let f = AssumExpr ((make ?loc:lid.loc @@ Name lid.v), [], ce),
-          { rf_coercion ; rf_reversible = None ; rf_instance ; rf_priority = None ;
-            rf_locality ; rf_notation = [] ; rf_canonical = true } in
+          check_proj_flags
+            { rf_coercion ; rf_reversible = None ; rf_instance ; rf_priority = None ;
+              rf_locality ; rf_canonical = true },
+          []
+  in
   let recordl = [id, bl, c, None, [f], None] in
   let kind = Class true in
   let records = vernac_record recordl in
@@ -1151,14 +1215,17 @@ let preprocess_record ~atts udecl kind indl =
         | _ -> Notations.return Goptions.OptDefault in
       Notations.(rev ++ loc ++ canonical_field) in
     let (rf_reversible, rf_locality), rf_canonical = parse attr f.rfu_attrs in
-    x,
-    { rf_coercion = f.rfu_coercion;
-      rf_reversible;
-      rf_instance = f.rfu_instance;
-      rf_priority = f.rfu_priority;
-      rf_locality;
-      rf_notation = f.rfu_notation;
-      rf_canonical } in
+    let flags = check_proj_flags {
+        rf_coercion = f.rfu_coercion;
+        rf_reversible;
+        rf_instance = f.rfu_instance;
+        rf_priority = f.rfu_priority;
+        rf_locality;
+        rf_canonical;
+      }
+    in
+    x, flags, f.rfu_notation
+  in
   let unpack ((id, bl, c, decl), _) = match decl with
     | RecordDecl (oc, fs, ido) ->
       let bl = match bl with
@@ -1243,7 +1310,7 @@ let dump_inductive indl_for_glob decl =
       indl_for_glob;
     match decl with
     | Record { records } ->
-      let dump_glob_proj (x, _) = match x with
+      let dump_glob_proj (x, _, _) = match x with
         | Vernacexpr.(AssumExpr ({loc;v=Name id}, _, _) | DefExpr ({loc;v=Name id}, _, _, _)) ->
           Dumpglob.dump_definition (make ?loc id) false "proj"
         | _ -> () in
@@ -1318,11 +1385,13 @@ let vernac_cofixpoint ~pm ~refine ~atts cofixl =
     (fun pm -> ComFixpoint.do_mutually_recursive ?pm ~refine ~scope ?clearbody ~kind:(IsDefinition CoFixpoint) ~poly ?typing_flags ?user_warns ?using (CCoFixRecOrder, cofixl))
     pm
 
-let vernac_scheme l =
+let vernac_scheme atts l =
   if Dumpglob.dump () then
     List.iter (fun (lid, sch) ->
       Option.iter (fun lid -> Dumpglob.dump_definition lid false "def") lid) l;
-  Indschemes.do_scheme (Global.env ()) l
+  let register = Attributes.(parse (bool_attribute ~name:"register") atts) in
+  let register = Option.default true register in
+  Indschemes.do_scheme ~register (Global.env ()) l
 
 (* [XXX] locmap unused here *)
 let vernac_combined_scheme lid l ~locmap =
@@ -1390,7 +1459,7 @@ let add_subnames_of ?loc len n ns full_n ref =
         ns mip.mind_consnames
     in
     List.fold_left (fun ns q ->
-        let s = Indrec.elimination_suffix q in
+        let s = Elimschemes.elimination_suffix q in
         let n_elim = Id.of_string (Id.to_string mip.mind_typename ^ s) in
         match importable_extended_global_of_path ?loc (Libnames.add_path_suffix path_prefix n_elim) with
         | exception Not_found -> ns
@@ -1426,7 +1495,7 @@ let cache_name (len,n) =
   let open Globnames in
   let open GlobRef in
   match n with
-  | Abbrev kn -> Abbreviation.import_abbreviation (len+1) (Nametab.path_of_abbreviation kn) kn
+  | Abbrev kn -> Abbreviation.import (len+1) (Nametab.path_of_abbreviation kn) kn
   | TrueGlobal (VarRef _) -> assert false
   | TrueGlobal (ConstRef c) when Declare.is_local_constant c ->
     (* Can happen through functor application *)
@@ -1639,8 +1708,13 @@ let vernac_require_interp needed modrefl export qidl =
     export
 
 let vernac_require ~intern from export qidl =
-  let needed, modrefl = Synterp.synterp_require ~intern from export qidl in
-  vernac_require_interp needed modrefl export qidl
+  let needed, modrefl = Flags.with_modified_ref Flags.in_synterp_phase (fun _ -> Some true) (fun () ->
+      Synterp.synterp_require ~intern from export qidl)
+      ()
+  in
+  Flags.with_modified_ref Flags.in_synterp_phase (fun _ -> Some false) (fun () ->
+      vernac_require_interp needed modrefl export qidl)
+    ()
 
 (* Coercions and canonical structures *)
 
@@ -1741,6 +1815,10 @@ let warn_implicit_core_hint_db =
          (fun () -> strbrk "Adding and removing hints in the core database implicitly is deprecated. "
              ++ strbrk"Please specify a hint database.")
 
+let warn_implicit_create_hint_db =
+  CWarnings.create ~name:"implicit-create-hint-db" ~category:Deprecation.Version.v9_2
+    (fun db -> strbrk "Implicitly declaring hint databases is deprecated. Please explicitly create " ++ quote (str db))
+
 let vernac_remove_hints ~atts dbnames ids =
   let locality = Attributes.(parse hint_locality atts) in
   let dbnames =
@@ -1757,12 +1835,30 @@ let vernac_hints ~atts dbnames h =
     else dbnames
   in
   let locality, poly = Attributes.(parse Notations.(hint_locality ++ polymorphic) atts) in
+  let check_db db =
+    if String.equal db "nocore" then ()
+    else match Hints.searchtable_map db with
+    | _ -> ()
+    | exception Not_found ->
+      let () = warn_implicit_create_hint_db db in
+      Hints.create_hint_db false db TransparentState.empty false
+  in
+  let () = List.iter check_db dbnames in
   Hints.add_hints ~locality dbnames (ComHints.interp_hints ~poly h)
 
-let vernac_abbreviation ~atts lid x only_parsing =
-  let module_local, user_warns = Attributes.(parse Notations.(module_locality ++ user_warns_with_use_globref_instead) atts) in
+let warn_deprecated_notation_for_abbreviation =
+  CWarnings.create ~name:"notation-for-abbreviation" ~category:Deprecation.Version.v9_2
+    ~quickfix:(fun ~loc () -> [Quickfix.make ~loc (str "Abbreviation")])
+    (fun () ->
+       strbrk "Use of \"Notation\" keyword for abbreviations is deprecated, \
+               use \"Abbreviation\" instead.")
+
+let vernac_abbreviation ~warn_old_notation ~atts lid x only_parsing =
+  Option.iter (fun loc -> warn_deprecated_notation_for_abbreviation ~loc ())
+    warn_old_notation;
+  let local, user_warns = Attributes.(parse Notations.(hint_locality_no_sections ++ user_warns_with_use_globref_instead) atts) in
   Dumpglob.dump_definition lid false "abbrev";
-  Metasyntax.add_abbreviation ~local:module_local user_warns (Global.env()) lid.v x only_parsing
+  Metasyntax.add_abbreviation ~local user_warns (Global.env()) lid.v x only_parsing
 
 let default_env () = {
   Notation_term.ninterp_var_type = Id.Map.empty;
@@ -2535,6 +2631,8 @@ let translate_vernac_synterp ?loc ~atts v = let open Vernactypes in match v with
   | EVernacNotation { local; decl } ->
     vtdefault(fun () -> Metasyntax.add_notation_interpretation ~local (Global.env()) decl)
 
+  | EVernacDeclareMLModule f -> vtdefault (fun () -> Mltop.run_interp_fun f)
+
   | EVernacDefineModule (export,lid,bl,argsexport,mtys,mexprl) ->
     let i () =
       unsupported_attributes atts;
@@ -2689,8 +2787,7 @@ let translate_pure_vernac ?loc ~atts v = let open Vernactypes in match v with
 
   | VernacScheme l ->
     vtdefault(fun () ->
-        unsupported_attributes atts;
-        vernac_scheme l)
+        vernac_scheme atts l)
   | VernacCombinedScheme (id, l) ->
     vtdefault(fun () ->
         unsupported_attributes atts;
@@ -2770,8 +2867,8 @@ let translate_pure_vernac ?loc ~atts v = let open Vernactypes in match v with
     vtdefault(fun () ->
         vernac_hints ~atts dbnames hints)
 
-  | VernacSyntacticDefinition (id,c,b) ->
-     vtdefault(fun () -> vernac_abbreviation ~atts id c b)
+  | VernacAbbreviation (id,c,b,warn_old_notation) ->
+     vtdefault(fun () -> vernac_abbreviation ~warn_old_notation ~atts id c b)
 
   | VernacArguments (qid, args, more_implicits, flags) ->
     vtdefault(fun () ->

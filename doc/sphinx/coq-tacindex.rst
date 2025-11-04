@@ -1,9 +1,5 @@
 :orphan:
 
-.. hack to get index in TOC
+.. raw:: html
 
-.. _tactic_index:
-
--------------
-Tactic index
--------------
+   <meta http-equiv="refresh" content="0;URL=rocq-tacindex.html">

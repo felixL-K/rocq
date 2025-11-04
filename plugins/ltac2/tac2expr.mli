@@ -123,7 +123,7 @@ type case_info = type_constant or_tuple
 
 type 'a open_match = {
   opn_match : 'a;
-  opn_branch : (Name.t * Name.t array * 'a) KNmap.t;
+  opn_branch : (Name.t * Name.t array * 'a) KerName.Map.t;
   (** Invariant: should not be empty *)
   opn_default : Name.t * 'a;
 }
@@ -196,7 +196,7 @@ type exp_level =
 type sexpr =
 | SexprStr of string CAst.t
 | SexprInt of int CAst.t
-| SexprRec of Loc.t * Id.t option CAst.t * sexpr list
+| SexprRec of Loc.t * qualid option CAst.t * sexpr list
 
 (** {5 Toplevel statements} *)
 

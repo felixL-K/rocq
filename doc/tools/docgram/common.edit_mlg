@@ -118,6 +118,7 @@ RENAME: [
 | Constr.cpattern cpattern
 | G_vernac.section_subset_expr section_var_expr
 | Prim.ident ident
+| Prim.identref identref
 | Prim.reference reference
 | Prim.string string
 | Prim.integer integer
@@ -166,7 +167,12 @@ DELETE: [
 | test_variance_ident
 | test_qualid_with_or_lpar_or_rbrac
 | test_leftsquarebracket_equal
+| test_old_sort_qvar
 | test_sort_qvar
+| test_ltac2_ident
+| test_doublepipe_univ_decl
+| test_doublepipe_cumul_univ_decl
+| test_semicolon_cumul_univ_decl
 ]
 
 (* additional nts to be spliced *)
@@ -328,24 +334,25 @@ scope_delimiter: [
 ]
 
 sort: [
-| REPLACE "Type" "@{" reference "|" universe "}"
-| WITH "Type" "@{" OPT [ qualid "|" ] universe "}"
+| REPLACE "Type" "@{" reference ";" universe "}"
+| WITH "Type" "@{" OPT [ qualid [ "|" | ";" ] ] universe "}"
 | DELETE "Type" "@{" universe "}"
+| DELETE "Type" "@{" reference "|" universe "}"
 ]
 
 term100: [
-| REPLACE term99 "<:" term200
-| WITH term99 "<:" type
-| MOVETO term_cast term99 "<:" type
-| REPLACE term99 "<<:" term200
-| WITH term99 "<<:" type
-| MOVETO term_cast term99 "<<:" type
-| REPLACE term99 ":>" term200
-| WITH term99 ":>" type
-| MOVETO term_cast term99 ":>" type
-| REPLACE term99 ":" term200
-| WITH term99 ":" type
-| MOVETO term_cast term99 ":" type
+| REPLACE term100 "<:" term200
+| WITH term100 "<:" type
+| MOVETO term_cast term100 "<:" type
+| REPLACE term100 "<<:" term200
+| WITH term100 "<<:" type
+| MOVETO term_cast term100 "<<:" type
+| REPLACE term100 ":>" term200
+| WITH term100 ":>" type
+| MOVETO term_cast term100 ":>" type
+| REPLACE term100 ":" term200
+| WITH term100 ":" type
+| MOVETO term_cast term100 ":" type
 ]
 
 constr: [
@@ -361,7 +368,7 @@ term10: [
 | WITH "@" qualid_annotated LIST1 term9
 | REPLACE term9
 | WITH constr
-| MOVETO term_application term9 LIST1 arg
+| MOVETO term_application term10 LIST1 arg
 | MOVETO term_application "@" qualid_annotated LIST1 term9
 (* fixme: add in as a prodn somewhere *)
 | MOVETO dangling_pattern_extension_rule "@" pattern_ident LIST1 identref
@@ -374,25 +381,25 @@ term9: [
 ]
 
 term1: [
-| REPLACE term0 ".(" global univ_annot LIST0 arg ")"
-| WITH    term0 ".(" global univ_annot LIST0 arg ")" (* huh? *)
-| REPLACE term0 "%" IDENT
-| WITH term0 "%" scope_key
-| MOVETO term_scope term0 "%" scope_key
-| REPLACE term0 "%_" IDENT
-| WITH term0 "%_" scope_key
-| MOVETO term_scope term0 "%_" scope_key
-| MOVETO term_projection term0 ".(" global univ_annot LIST0 arg ")"
-| MOVETO term_projection term0 ".(" "@" global univ_annot LIST0 ( term9 ) ")"
+| REPLACE term1 ".(" global univ_annot LIST0 arg ")"
+| WITH    term1 ".(" global univ_annot LIST0 arg ")" (* huh? *)
+| REPLACE term1 "%" IDENT
+| WITH term1 "%" scope_key
+| MOVETO term_scope term1 "%" scope_key
+| REPLACE term1 "%_" IDENT
+| WITH term1 "%_" scope_key
+| MOVETO term_scope term1 "%_" scope_key
+| MOVETO term_projection term1 ".(" global univ_annot LIST0 arg ")"
+| MOVETO term_projection term1 ".(" "@" global univ_annot LIST0 ( term9 ) ")"
 ]
 
 term0: [
 | DELETE reference univ_annot
 | REPLACE "{|" record_declaration bar_cbrace
-| WITH "{|" LIST0 field_def SEP ";" OPT ";" bar_cbrace
+| WITH "{|" OPT [ LIST1 field_def SEP ";" OPT ";" ] bar_cbrace
 | MOVETO number_or_string NUMBER
 | MOVETO number_or_string string
-| MOVETO term_record "{|" LIST0 field_def SEP ";" OPT ";" bar_cbrace
+| MOVETO term_record "{|" OPT [ LIST1 field_def SEP ";" OPT ";" ] bar_cbrace
 | MOVETO term_generalizing "`{" term200 "}"
 | MOVETO term_generalizing "`(" term200 ")"
 | MOVETO term_ltac "ltac" ":" "(" ltac_expr5 ")"
@@ -512,16 +519,16 @@ DELETE: [
 ]
 
 pattern10: [
-| REPLACE pattern1 LIST1 pattern1
-| WITH pattern1 LIST0 pattern1
+| REPLACE pattern10 LIST1 pattern1
+| WITH pattern10 LIST0 pattern1
 | DELETE pattern1
 ]
 
 pattern1: [
-| REPLACE pattern0 "%" IDENT
-| WITH pattern0 "%" scope_key
-| REPLACE pattern0 "%_" IDENT
-| WITH pattern0 "%_" scope_key
+| REPLACE pattern1 "%" IDENT
+| WITH pattern1 "%" scope_key
+| REPLACE pattern1 "%_" IDENT
+| WITH pattern1 "%_" scope_key
 ]
 
 pattern0: [
@@ -548,7 +555,7 @@ record_definition: [
 
 (* No mixed inductive-record definitions, opt_coercion is meaningless for Inductive *)
 inductive_definition: [
-| cumul_ident_decl binders OPT [ "|" binders ] OPT [ ":" type ] ":=" OPT "|" LIST1 constructor SEP "|" decl_notations
+| cumul_ident_decl binders OPT [ "|" binders ] OPT [ ":" type ] ":=" OPT [ OPT "|" LIST1 constructor SEP "|" ] decl_notations
 ]
 
 (* No mutual recursion, no inductive classes, type must be a sort *)
@@ -559,7 +566,7 @@ singleton_class_definition: [
 
 (* No record syntax, opt_coercion not supported for Variant, := ... required *)
 variant_definition: [
-| ident_decl binders OPT [ "|" binders ] OPT [ ":" type ] ":=" OPT "|" LIST1 constructor SEP "|" decl_notations
+| ident_decl binders OPT [ "|" binders ] OPT [ ":" type ] ":=" OPT [ OPT "|" LIST1 constructor SEP "|" ] decl_notations
 ]
 
 gallina: [
@@ -617,15 +624,9 @@ constructors_or_record: [
 | DELETENT
 ]
 
-(* decl_notations not allowed for Record, Structure or Class *)
-record_field: [
-| REPLACE quoted_attributes record_binder OPT [ "|" natural ] decl_notations
-| WITH quoted_attributes record_binder OPT [ "|" natural ]
-]
-
 record_fields: [
 | REPLACE record_field ";" record_fields
-| WITH LIST0 record_field SEP ";" OPT ";"
+| WITH OPT [ LIST1 record_field SEP ";" OPT ";" ]
 | DELETE record_field
 | DELETE (* empty *)
 ]
@@ -640,16 +641,23 @@ inline: [
 | DELETE "Inline"
 ]
 
+univ_level_or_quality: [
+| REPLACE NUMBER "0"
+| WITH "0"
+]
+
 univ_decl: [
-| REPLACE "@{" test_univ_decl LIST0 identref "|" LIST0 identref [ "+" | ] univ_decl_constraints
-| WITH    "@{" OPT [ LIST0 identref "|" ] LIST0 identref  OPT "+"  OPT [ "|" LIST0 univ_constraint SEP "," OPT "+" ] "}"
+| REPLACE "@{" LIST0 identref ";" LIST0 identref [ "+" | ] univ_decl_constraints
+| WITH    "@{" OPT [ LIST0 identref [ "|" | ";" ] ] LIST0 identref  OPT "+"  OPT [ "|" LIST0 univ_constraint SEP "," OPT "+" ] "}"
 | DELETE "@{" LIST0 identref [ "+" | ] univ_decl_constraints
+| DELETE "@{" LIST0 identref "|" LIST0 identref [ "+" | ] univ_decl_constraints
 ]
 
 cumul_univ_decl: [
-| REPLACE "@{" test_cumul_univ_decl LIST0 identref "|" LIST0 variance_identref [ "+" | ] univ_decl_constraints
-| WITH "@{" OPT [ LIST0 identref "|" ] LIST0 variance_identref    OPT "+"   OPT [ "|" LIST0 univ_constraint SEP "," OPT "+" ] "}"
+| REPLACE "@{" LIST0 identref ";" LIST0 variance_identref [ "+" | ] univ_decl_constraints
+| WITH "@{" OPT [ LIST0 identref [ "|" | ";" ] ] LIST0 variance_identref    OPT "+"   OPT [ "|" LIST0 univ_constraint SEP "," OPT "+" ] "}"
 | DELETE "@{" LIST0 variance_identref [ "+" | ] univ_decl_constraints
+| DELETE "@{" LIST0 identref "|" LIST0 variance_identref [ "+" | ] univ_decl_constraints
 ]
 
 of_type: [
@@ -735,7 +743,7 @@ gallina_ext: [
 | REPLACE "Coercion" by_notation ":" coercion_class ">->" coercion_class
 | WITH "Coercion" smart_global OPT [ ":" coercion_class ">->" coercion_class ]
 
-(* semantically restricted per https://github.com/coq/coq/pull/12936#discussion_r492705820 *)
+(* semantically restricted per https://github.com/rocq-prover/rocq/pull/12936#discussion_r492705820 *)
 (* global OPT univ_decl is just ident_decl, the first OPT is moved to the rule above *)
 | REPLACE "Coercion" global OPT [ OPT univ_decl def_body ]
 | WITH "Coercion" ident_decl def_body
@@ -844,8 +852,8 @@ DELETE: [
 
 ltac_constructs: [
 (* repeated in main ltac grammar - need to create a COPY edit *)
-| ltac_expr3 ";" [ ltac_expr3 ]
-| ltac_expr3 ";" "[" for_each_goal "]"
+| ltac_expr4 ";" [ ltac_expr3 ]
+| ltac_expr4 ";" "[" for_each_goal "]"
 
 | ltac_expr1 "+" [ ltac_expr2 ]
 | ltac_expr1 "||" [ ltac_expr2 ]
@@ -856,9 +864,10 @@ ltac_constructs: [
 | toplevel_selector ltac_expr5
 ]
 
+(* temporarily render left-associativity manually, see #21029 *)
 ltac_expr4: [
-| REPLACE ltac_expr3 ";" for_each_goal "]"
-| WITH ltac_expr3 ";" "[" for_each_goal "]"
+| REPLACE ltac_expr4 ";" for_each_goal "]"
+| WITH ltac_expr4 ";" "[" for_each_goal "]"
 ]
 
 l3_tactic: [ ]
@@ -1096,9 +1105,6 @@ simple_tactic: [
 | DELETE "unify" constr constr
 | REPLACE "unify" constr constr "with" preident
 | WITH "unify" constr constr OPT ( "with" preident )
-| DELETE "destauto"
-| REPLACE "destauto" "in" hyp
-| WITH "destauto" OPT ( "in" hyp )
 | REPLACE "autounfold_one" hintbases "in" hyp
 | WITH "autounfold_one" hintbases OPT ( "in" hyp )
 | DELETE "autounfold_one" hintbases
@@ -1220,8 +1226,8 @@ printable: [
 | DELETE "Hint" smart_global
 | DELETE "Hint" "*"
 | DELETE "Notation" string
-| REPLACE "Notation" string "in" "custom" IDENT
-| WITH "Notation" string OPT [ "in" "custom" IDENT ]
+| REPLACE "Notation" string "in" "custom" qualid
+| WITH "Notation" string OPT [ "in" "custom" qualid ]
 
 | INSERTALL "Print"
 ]
@@ -1419,9 +1425,9 @@ opt_scope: [
 ]
 
 syntax_modifier: [
-| DELETE "in" "custom" IDENT
-| REPLACE "in" "custom" IDENT; "at" "level" natural
-| WITH "in" "custom" IDENT OPT ( "at" "level" natural )
+| DELETE "in" "custom" qualid
+| REPLACE "in" "custom" qualid; "at" "level" natural
+| WITH "in" "custom" qualid OPT ( "at" "level" natural )
 | DELETE IDENT; "in" "scope" IDENT
 | REPLACE IDENT; "," LIST1 IDENT SEP "," [ "at" level | "in" "scope" IDENT ]
 | WITH LIST1 IDENT SEP "," [ "at" level | "in" "scope" IDENT ]
@@ -1553,25 +1559,30 @@ vernac_toplevel: [
 | DELETE vernac_control
 ]
 
-vernac_control: [
-(* replacing vernac_control with command is cheating a little;
-   they can't refer to the vernac_toplevel commands.
-   cover this the descriptions of these commands *)
-| REPLACE "Time" vernac_control
+(* Pretend that control flags are commands *)
+control_flag: [
+(* using sentence is cheating a little;
+   after a control_flag can't refer to the vernac_toplevel commands.
+   cover this in the descriptions of these commands *)
+| REPLACE "Time"
 | WITH "Time" sentence
-| REPLACE "Instructions" vernac_control
+| REPLACE "Instructions"
 | WITH "Instructions" sentence
-| REPLACE "Profile" OPT STRING vernac_control
+| REPLACE "Profile" OPT STRING
 | WITH "Profile" OPT STRING sentence
-| REPLACE "Redirect" ne_string vernac_control
+| REPLACE "Redirect" ne_string
 | WITH "Redirect" ne_string sentence
-| REPLACE "Timeout" natural vernac_control
+| REPLACE "Timeout" natural
 | WITH "Timeout" natural sentence
-| REPLACE "Fail" vernac_control
+| REPLACE "Fail"
 | WITH "Fail" sentence
-| REPLACE "Succeed" vernac_control
+| REPLACE "Succeed"
 | WITH "Succeed" sentence
-| DELETE decorated_vernac
+]
+
+vernac_control: [
+| DELETE LIST0 control_flag decorated_vernac
+| control_flag
 ]
 
 of_module_type: [
@@ -1736,7 +1747,7 @@ tactic_mode: [
 (* todo: make sure to document this production! *)
 (* deleting to allow splicing query_command into command *)
 | DELETE OPT ltac_selector OPT ltac_info tactic ltac_use_default
-| DELETE "par" ":" OPT ltac_info tactic ltac_use_default
+| DELETE "par" ":" OPT ltac_info tactic "."
 (* Ignore attributes (none apply) and "...". *)
 | ltac_info tactic
 | MOVETO command ltac_info tactic
@@ -1814,6 +1825,7 @@ command: [
 
 SPLICE: [
 | query_command
+| control_flag
 ]
 
 query_command: [ ] (* re-add as a placeholder *)
@@ -1986,8 +1998,8 @@ SPLICE: [
 ]
 
 ltac2_expr3: [
-| REPLACE ltac2_expr2 "," LIST1 ltac2_expr2 SEP ","      (* Ltac2 plugin *)
-| WITH LIST1 ltac2_expr2 SEP "," TAG Ltac2
+| REPLACE ltac2_expr3 "," LIST1 ltac2_expr2 SEP ","      (* Ltac2 plugin *)
+| WITH LIST1 ltac2_expr3 SEP "," TAG Ltac2
 | DELETE ltac2_expr2      (* Ltac2 plugin *)
 ]
 
@@ -2032,7 +2044,6 @@ ltac2_entry: [
 | WITH "Ltac2" tac2def_val
 | REPLACE tac2def_ext     (* Ltac2 plugin *)
 | WITH "Ltac2" tac2def_ext
-| "Ltac2" "Notation" ident ":=" ltac2_expr6 TAG Ltac2  (* variant *)
 | MOVEALLBUT command
 (* todo: MOVEALLBUT should ignore tag on "but" prodns *)
 ]
@@ -2059,7 +2070,9 @@ SPLICE: [
 | tac2def_typ
 | tac2def_ext
 | tac2def_syn
+| tac2abbrev_syn
 | ltac2def_syn
+| ltac2abbrev_syn
 | tac2def_mut
 | rec_flag
 | tac2alg_constructors
@@ -2076,10 +2089,6 @@ ltac2_expr5: [
 | MOVETO simple_tactic "match" ltac2_expr5 "with" ltac2_branches "end"      (* Ltac2 plugin *)
 | MOVETO simple_tactic "if" ltac2_expr5 "then" ltac2_expr5 "else" ltac2_expr5      (* Ltac2 plugin *)
 | DELETE simple_tactic
-]
-
-goal_match_list: [
-| EDIT ADD_OPT "|" LIST1 gmatch_rule SEP "|"      (* Ltac2 plugin *)
 ]
 
 ltac2_quotations: [
@@ -2227,7 +2236,7 @@ induction_clause_list: [
 | LIST1 induction_clause SEP "," OPT induction_principle
 ]
 
-(* see https://github.com/coq/coq/pull/14179#discussion_r654000296 *)
+(* see https://github.com/rocq-prover/rocq/pull/14179#discussion_r654000296 *)
 as_or_and_ipat: [
 | DELETE "as" or_and_intropattern_loc
 | DELETE "as" equality_intropattern
@@ -2427,6 +2436,7 @@ SPLICE: [
 | enable_notation_interpretation
 | enable_notation_flags
 | opt_scope
+| located_notation
 ] (* end SPLICE *)
 
 RENAME: [

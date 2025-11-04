@@ -264,9 +264,10 @@ let set_prompt prompt =
 (* Read the input stream until a dot is encountered *)
 let parse_to_dot =
   let rec dot kwstate st = match Gramlib.LStream.next kwstate st with
-    | Tok.KEYWORD ("."|"...") -> ()
-    | Tok.EOI -> ()
-    | _ -> dot kwstate st
+    | Some (Tok.KEYWORD ("."|"...")) -> Ok ()
+    | Some Tok.EOI -> Ok ()
+    | Some _ -> dot kwstate st
+    | None -> Error ()
   in
   Procq.Entry.(of_parser "Coqtoplevel.dot" { parser_fun = dot })
 
@@ -419,7 +420,7 @@ let top_goal_print ~doc c oldp newp =
 let { Goptions.get = exit_on_error } =
   let open Goptions in
   declare_bool_option_and_ref
-    ~key:["Coqtop";"Exit";"On";"Error"]
+    ~key:["Rocqtop";"Exit";"On";"Error"]
     ~value:false
     ()
 
@@ -477,7 +478,7 @@ let process_toplevel_command ~state stm =
 
   | VernacControl { CAst.loc; v=c } ->
     let nstate = Vernac.process_expr ~state (CAst.make ?loc c) in
-    let () = match nstate.proof with
+    let () = if not !print_emacs then match nstate.proof with
     | None -> ()
     | Some proof -> top_goal_print ~doc:state.doc c state.proof proof
     in

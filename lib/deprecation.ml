@@ -13,6 +13,7 @@ type 'a with_qf = { depr : t; use_instead : 'a option }
 
 let drop_qf { depr } = depr
 let with_empty_qf depr = { depr; use_instead = None }
+let map_qf f { depr; use_instead } = { depr; use_instead = Option.map f use_instead }
 
 let make ?since ?note () = { since ; note }
 let make_with_qf depr ?use_instead () = { depr; use_instead }
@@ -47,18 +48,20 @@ let printer ~object_name ~pp_qf pp (x,{depr={since;note};use_instead}) =
   pr_opt (fun since -> str "since " ++ str since) since ++
   str "." ++ pr_opt (fun x -> x) note
 
+let quickfix ~pp_qf ~loc (x,{use_instead}) =
+  match use_instead with
+  | None -> []
+  | Some replacement ->
+    [Quickfix.make ~loc (pp_qf replacement)]
+
 let create_warning_with_qf ?default ~object_name ~warning_name_if_no_since ~pp_qf pp =
   let pp = printer ~object_name ~pp_qf pp in
+  let quickfix = quickfix ~pp_qf in
   let main_cat, main_w = CWarnings.create_hybrid ?default ~name:warning_name_if_no_since ~from:[depr_cat] () in
-  let main_w = CWarnings.create_in main_w pp in
+  let main_w = CWarnings.create_in main_w ~quickfix pp in
   let warnings = ref CString.Map.empty in
   fun ?loc (v, ({depr = {since}; use_instead } as info)) ->
     let since = since_name since in
-    let quickfix =
-      match use_instead with
-      | None -> None
-      | Some replacement ->
-          Option.cata (fun loc -> Some [Quickfix.make ~loc (pp_qf replacement)]) None loc in
     let w = match since with
       | NoSince -> main_w
       | Since since ->
@@ -73,7 +76,7 @@ let create_warning_with_qf ?default ~object_name ~warning_name_if_no_since ~pp_q
           warnings := CString.Map.add since w !warnings;
           w
     in
-    w ?loc ?quickfix (v,info)
+    w ?loc (v,info)
 
 let create_warning ?default ~object_name ~warning_name_if_no_since pp =
   let f = create_warning_with_qf ?default ~object_name ~warning_name_if_no_since ~pp_qf:(fun _ -> assert false) pp in
@@ -95,6 +98,7 @@ module Version = struct
   let v8_20 = get_generic_cat "8.20"
   let v9_0 = get_generic_cat "9.0"
   let v9_1 = get_generic_cat "9.1"
+  let v9_2 = get_generic_cat "9.2"
   (* When adding a new version here, please also add
      #[export] Set Warnings "-deprecated-since-X.Y".
      in theories/Compat/RocqX{Y-1}.v *)

@@ -34,7 +34,7 @@
 (* Type of a proof. *)
 type t
 
-type data =
+type data = private
   { sigma : Evd.evar_map
   (** A representation of the evar_map [EJGA wouldn't it better to just return the proofview?] *)
   ; goals : Evar.t list
@@ -189,6 +189,7 @@ val all_goals : t -> Evar.Set.t
 
 val solve :
      ?with_end_tac:unit Proofview.tactic
+  -> Environ.env
   -> Goal_select.t
   -> int option
   -> unit Proofview.tactic

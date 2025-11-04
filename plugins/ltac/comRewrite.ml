@@ -51,7 +51,7 @@ module PropGlobal = struct
   let respectful_ref () = Rocqlib.lib_ref "rewrite.prop.respectful"
 
   let proper_class =
-    fun () -> Option.get (TC.class_info (Rocqlib.lib_ref "rewrite.prop.Proper"))
+    fun () -> Option.get (TC.class_info (Global.env ()) (Rocqlib.lib_ref "rewrite.prop.Proper"))
 
   let proper_proj () = Rocqlib.lib_ref "rewrite.prop.proper_prf"
 
@@ -228,7 +228,7 @@ let add_morphism_interactive atts ~tactic m n : Declare.Proof.t =
        let cinfo = Declare.CInfo.make ?loc:instance_id.loc ~name:instance_id.v ~typ:morph () in
        let info = Declare.Info.make ~poly ~hook ~kind () in
        let lemma = Declare.Proof.start ~cinfo ~info evd in
-       fst (Declare.Proof.by tactic lemma)) ()
+       fst (Declare.Proof.by (Global.env ()) tactic lemma)) ()
 
 let add_morphism atts ~tactic binders m s n =
   init_setoid ();

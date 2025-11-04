@@ -19,15 +19,24 @@ open Search
 open Vernacexpr
 open Goptions
 
-let global_module qid =
-  try Nametab.full_name_module qid
+let open_or_global_module qid =
+  try Nametab.full_name_open_mod qid
   with Not_found ->
+    try Nametab.full_name_module qid
+    with Not_found ->
+      user_err ?loc:qid.CAst.loc
+       (str "Module/Section " ++ Ppconstr.pr_qualid qid ++ str " not found.")
+
+(*
+let global_module qid =
     user_err ?loc:qid.CAst.loc
      (str "Module/Section " ++ Ppconstr.pr_qualid qid ++ str " not found.")
-
+*)
 let interp_search_restriction = function
-  | SearchOutside l -> SearchOutside (List.map global_module l)
-  | SearchInside l -> SearchInside (List.map global_module l)
+  | SearchOutside l ->
+      SearchOutside (List.map open_or_global_module l)
+  | SearchInside l ->
+      SearchInside (List.map open_or_global_module l)
 
 let kind_searcher env = Decls.(function
   (* Kinds referring to the keyword introducing the object *)
@@ -47,8 +56,8 @@ let kind_searcher env = Decls.(function
   | IsDefinition Scheme ->
     let schemes = DeclareScheme.all_schemes () in
     let schemes = lazy begin
-      Indmap.fold (fun _ schemes acc ->
-          UnivGen.Map.fold (fun _ c acc -> Cset.add c acc) schemes acc)
+      Indmap_env.fold (fun _ schemes acc ->
+          DeclareScheme.Key.Map.fold (fun _ c acc -> Cset.add c acc) schemes acc)
         schemes Cset.empty
     end
     in
@@ -79,7 +88,7 @@ let interp_search_item env sigma =
              which fails, not seeing that A can be Prop; so we use an
              untyped pattern as a fallback (i.e w/o no insertion of
              coercions, no compilation of pattern-matching) *)
-          snd (Constrintern.intern_constr_pattern env sigma ~as_type:head pat) in
+          snd (Constrintern.interp_constr_pattern env sigma ~as_type:head pat) in
       GlobSearchSubPattern (where,head,pat)
   | SearchString ((Anywhere,false),s,None)
       when Id.is_valid_ident_part s && String.equal (String.drop_simple_quotes s) s ->
@@ -122,7 +131,7 @@ let () =
 
 let interp_search env sigma s r =
   let r = interp_search_restriction r in
-  let get_pattern c = snd (Constrintern.intern_constr_pattern env sigma c) in
+  let get_pattern c = snd (Constrintern.interp_constr_pattern env sigma c) in
   let warnlist = ref [] in
   let pr_search ref kind env sigma c =
     let pr = pr_global ref in

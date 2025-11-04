@@ -160,7 +160,7 @@ Setting properties of a function's arguments
          See the example :ref:`here<example_more_implicits>`.
 
          .. todo the above feature seems a bit unnatural and doesn't play well with partial
-            application.  See https://github.com/coq/coq/pull/11718#discussion_r408841762
+            application.  See https://github.com/rocq-prover/rocq/pull/11718#discussion_r408841762
 
    Use :cmd:`About` to view the current implicit arguments setting for a :token:`reference`.
 
@@ -326,12 +326,12 @@ Binding arguments to scopes
       Notation "@@" := false (only parsing): mybool_scope.
 
       Bind Scope bool_scope with bool.
-      Notation "# x #" := (g x) (at level 40).
-      Check # @@ #.
+      Notation "<< x >>" := (g x).
+      Check << @@ >>.
       Arguments g _%_mybool_scope.
-      Check # @@ #.
+      Check << @@ >>.
       Delimit Scope mybool_scope with mybool.
-      Check # @@%mybool #.
+      Check << @@%mybool >>.
 
 .. _Args_effect_on_unfolding:
 
@@ -426,7 +426,7 @@ first arguments of an application, typing information should be propagated from
 the context to help inferring the types of the remaining arguments.
 
 .. todo the following text is a start on better wording but not quite complete.
-   See https://github.com/coq/coq/pull/11718#discussion_r410219992
+   See https://github.com/rocq-prover/rocq/pull/11718#discussion_r410219992
 
   ..
   Two common methods to determine the type of a construct are:
@@ -448,9 +448,10 @@ applications of :n:`@qualid`, to first type check the arguments in
 :n:`@arg_specs__1` and then propagate information from the typing context to
 type check the remaining arguments (in :n:`@arg_specs__2`).
 
-.. example:: Bidirectionality hints
+.. example:: Bidirectionality hints, example with coercion
 
-   In a context where a coercion was declared from ``bool`` to ``nat``:
+   In a context where a coercion was declared from ``bool`` to ``nat``
+   (see section :ref:`coercions`):
 
    .. rocqtop:: in reset
 
@@ -471,6 +472,48 @@ type check the remaining arguments (in :n:`@arg_specs__2`).
 
       Arguments ex_intro _ _ & _ _.
       Check (ex_intro _ true _ : exists n : nat, n > 0).
+
+.. example:: Bidirectionality hints, example with number comparison
+
+   Bidirectionality hints can be used without coercions,
+   as shown by the following example.
+
+   One could provide arguments with simpler types than expected
+   (or even fully implicit), and let Rocq infer the correct one.
+   For instance, consider the following definition:
+
+   .. rocqtop:: in reset
+
+      Import Nat.
+
+      Definition leb_implies_le {n m} (H : (n <=? m) = true) : n <= m.
+      Proof.
+         revert m H; induction n as [| n IH]; intros m; [intros _; exact (le_0_n _) |].
+         destruct m; intros [= H]; apply le_n_S, IH; exact H.
+      Qed.
+
+   One could use leb_implies_le to prove ``3 <= 4`` without providing
+   an explicit proof of ``3 <=? 4 = true``, by using ``eq_refl`` in ``H``'s place.
+
+   Rocq is able to infer that ``n = 3`` and ``m = 4`` by using ``3 <= 4`` from the
+   expected type and ``n <= m`` from the definition of ``leb_implies_le``.
+   But it cannot use these values to infer that H's type should be ``(3 <=? 4) = true``
+   from ``(?n <=? ?m) = true`` as one could expect. The reason is that Rocq doesn't
+   make types infered for some arguments available for the inference of the
+   remaining arguments:
+
+   .. rocqtop:: all
+
+      Fail Check leb_implies_le (eq_refl _) : 3 <= 4.
+
+   However, by using a bidirectionality hint, values infered for arguments on the left of ``&``
+   are propagated to those on the right. This makes values ``n = 3`` and ``m = 4`` propagate to ``H``,
+   allowing ``(?n <=? ?m)`` to be reduced to ``true``:
+
+   .. rocqtop:: all
+
+      Arguments leb_implies_le n m & H.
+      Check leb_implies_le (eq_refl _) : 3 <= 4.
 
 Rocq will attempt to produce a term which uses the arguments you
 provided, but in some cases involving Program mode the arguments after

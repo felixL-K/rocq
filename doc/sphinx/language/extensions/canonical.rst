@@ -538,10 +538,10 @@ We need some infrastructure for that.
     Definition id {T} {t : T} (x : phantom t) := x.
 
     Notation "[find v | t1 ~ t2 ] p" := (fun v (_ : unify t1 t2 None) => p)
-      (at level 50, v name, only parsing).
+      (at level 50, v name, p at level 50, only parsing).
 
     Notation "[find v | t1 ~ t2 | s ] p" := (fun v (_ : unify t1 t2 (Some s)) => p)
-      (at level 50, v name, only parsing).
+      (at level 50, v name, p at level 50, only parsing).
 
     Notation "'Error : t : s" := (unify _ t (Some s))
       (at level 50, format "''Error' : t : s").
@@ -572,7 +572,7 @@ instances of the ``LEQ`` class.
     [find m | m ~ m0 | Is_not_the_right_mixin ]
     LEQ._Pack T (LEQ.Class ce co m).
 
-   Notation Pack T m := (packager T _ _ m _ id _ id _ id _ id _ id).
+   Abbreviation Pack T m := (packager T _ _ m _ id _ id _ id _ id _ id).
 
 The object ``Pack`` takes a type ``T`` (the key) and a mixin ``m``. It infers all
 the other pieces of the class ``LEQ`` and declares them as canonical
@@ -581,7 +581,7 @@ information we add in the ``LEQ`` class is the mixin, all the rest is
 already canonical for ``T`` and hence can be inferred by Rocq.
 
 ``Pack`` is a notation, hence it is not type checked at the time of its
-declaration. It will be type checked when it is used, an in that case ``T`` is
+declaration. It will be type checked when it is used, and in that case ``T`` is
 going to be a concrete type. The odd arguments ``_`` and ``id`` we pass to the
 packager represent respectively the classes to be inferred (like ``e``, ``o``,
 etc) and a token (``id``) to force their inference. Again, for all the details

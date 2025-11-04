@@ -26,7 +26,6 @@ open UnivGen
 let build_induction_scheme_in_type env dep sort ind =
   let sigma = Evd.from_env env in
   let sigma, pind = Evd.fresh_inductive_instance ~rigid:UState.univ_rigid env sigma ind in
-  let pind = Util.on_snd EConstr.EInstance.make pind in
   let sigma, sort = Evd.fresh_sort_in_quality ~rigid:UnivRigid sigma sort in
   let sigma, c = build_induction_scheme env sigma pind dep sort in
   Some (EConstr.to_constr sigma c, Evd.ustate sigma)
@@ -116,9 +115,10 @@ let optimize_non_type_induction_scheme kind dep sort env _handle ind _ =
     (* in case the inductive has a type elimination, generates only one
        induction scheme, the other ones share the same code with the
        appropriate type *)
-    let sigma, cte = Evd.fresh_constant_instance env sigma cte in
-    let c = mkConstU cte in
-    let t = Typeops.type_of_constant_in env cte in
+    let sigma, (cst, u) = Evd.fresh_constant_instance env sigma cte in
+    let u = EConstr.EInstance.kind sigma u in
+    let c = mkConstU (cst, u) in
+    let t = Typeops.type_of_constant_in env (cst, u) in
     let (mib,mip) = Inductive.lookup_mind_specif env ind in
     let npars =
       (* if a constructor of [ind] contains a recursive call, the scheme
@@ -245,12 +245,83 @@ let elim_scheme ~dep ~to_kind =
      end
   | Set -> if dep then rec_dep else rec_nodep
 
+let elimination_suffix =
+  let open UnivGen.QualityOrSet in
+  let open Sorts.Quality in
+  function
+  | Qual (QConstant QSProp) -> "_sind"
+  | Qual (QConstant QProp) -> "_ind"
+  | Qual (QConstant QType) | Qual (QVar _) -> "_rect"
+  | Set -> "_rec"
+
+let make_elimination_ident id s = Nameops.add_suffix id (elimination_suffix s)
+
+(* Look up function for the default elimination constant *)
+
+let lookup_eliminator_by_name env ind_sp s =
+  let open Names in
+  let open Environ in
+  let kn,i = ind_sp in
+  let mpu = KerName.modpath @@ MutInd.user kn in
+  let mpc = KerName.modpath @@ MutInd.canonical kn in
+  let ind_id = (lookup_mind kn env).mind_packets.(i).mind_typename in
+  let id = make_elimination_ident ind_id s in
+  let knu = KerName.make mpu id in
+  let knc = KerName.make mpc id in
+  (* Try first to get an eliminator defined in the same section as the *)
+  (* inductive type *)
+  let cst = Constant.make knu knc in
+  if mem_constant cst env then GlobRef.ConstRef cst
+  else
+    (* Then try to get a user-defined eliminator in some other places *)
+    (* using short name (e.g. for "eq_rec") *)
+    try Nametab.locate (Libnames.qualid_of_ident id)
+    with Not_found ->
+      CErrors.user_err
+        Pp.(strbrk "Cannot find the elimination combinator " ++
+            Id.print id ++ strbrk ", the elimination of the inductive definition " ++
+            Nametab.pr_global_env Id.Set.empty (GlobRef.IndRef ind_sp) ++
+            strbrk " on sort " ++ UnivGen.QualityOrSet.pr Sorts.QVar.raw_pr s ++
+            strbrk " is probably not allowed.")
+
+let deprecated_lookup_by_name =
+  CWarnings.create ~name:"deprecated-lookup-elim-by-name" ~category:Deprecation.Version.v9_1
+    Pp.(fun (env,ind,to_kind,r) ->
+        let pp_scheme () s = str (match scheme_kind_name s with (ss,_,_) -> String.concat " " ss) in
+        fmt "Found unregistered eliminator %t for %t by name.@ \
+             Use \"Register Scheme\" with it instead@ \
+             (\"as %a\" if dependent or \"as %a\" if non dependent)."
+          (fun () -> Termops.pr_global_env env r)
+          (fun () -> Termops.pr_global_env env (IndRef ind))
+          pp_scheme (elim_scheme ~dep:true ~to_kind)
+          pp_scheme (elim_scheme ~dep:false ~to_kind))
+
+let lookup_eliminator_by_name env ind s =
+  let r = lookup_eliminator_by_name env ind s in
+  deprecated_lookup_by_name (env,ind,s,r);
+  r
+
+let lookup_eliminator env ind s =
+  let nodep_scheme_first =
+    (* compat, add an option to control this and remove someday *)
+    let _, mip = Inductive.lookup_mind_specif env ind in
+    Sorts.is_prop mip.mind_sort && not (Indrec.is_prop_but_default_dependent_elim ind)
+  in
+  let schemes =
+    List.map (fun dep -> elim_scheme ~dep ~to_kind:s)
+      (if nodep_scheme_first then [false;true] else [true;false])
+  in
+  match List.find_map (fun scheme -> lookup_scheme scheme ind) schemes with
+  | Some c -> Names.GlobRef.ConstRef c
+  | None ->
+    (* XXX also lookup_scheme at less precise sort? eg if s=set try to_kind:qtype *)
+    lookup_eliminator_by_name env ind s
+
 (* Case analysis *)
 
 let build_case_analysis_scheme_in_type env dep sort ind =
   let sigma = Evd.from_env env in
   let (sigma, indu) = Evd.fresh_inductive_instance env sigma ind in
-  let indu = Util.on_snd EConstr.EInstance.make indu in
   let sigma, sort = Evd.fresh_sort_in_quality ~rigid:UnivRigid sigma sort in
   let (sigma, c) = build_case_analysis_scheme env sigma indu dep sort in
   let (c, _) = Indrec.eval_case_analysis c in

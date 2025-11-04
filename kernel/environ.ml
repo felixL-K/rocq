@@ -46,9 +46,9 @@ type link_info =
   | Linked of string
   | NotLinked
 
-type constant_key = constant_body * (link_info ref * key)
+type constant_key = constant_body * (link_info ref * key) * KerName.t
 
-type mind_key = mutual_inductive_body * link_info ref
+type mind_key = mutual_inductive_body * link_info ref * KerName.t
 
 type named_context_val = {
   env_named_ctx : Constr.named_context;
@@ -64,13 +64,13 @@ type rel_context_val = {
 type env = {
   env_constants : constant_key Cmap_env.t;
   env_inductives : mind_key Mindmap_env.t;
-  env_modules : module_body MPmap.t;
-  env_modtypes : module_type_body MPmap.t;
+  env_modules : module_body ModPath.Map.t;
+  env_modtypes : module_type_body ModPath.Map.t;
   env_named_context : named_context_val; (* section variables *)
   env_rel_context   : rel_context_val;
   env_universes : UGraph.t;
-  env_qualities : Sorts.QVar.Set.t;
-  symb_pats : rewrite_rule list Cmap_env.t;
+  env_qualities : QGraph.t;
+  symb_pats : machine_rewrite_rule list Cmap_env.t;
   env_typing_flags  : typing_flags;
   vm_library : Vmlibrary.t;
   retroknowledge : Retroknowledge.retroknowledge;
@@ -101,15 +101,15 @@ let empty_rel_context_val = {
 let empty_env = {
   env_constants = Cmap_env.empty;
   env_inductives = Mindmap_env.empty;
-  env_modules = MPmap.empty;
-  env_modtypes = MPmap.empty;
+  env_modules = ModPath.Map.empty;
+  env_modtypes = ModPath.Map.empty;
   constant_hyps = Cmap_env.empty;
   inductive_hyps = Mindmap_env.empty;
   env_named_context = empty_named_context_val;
   env_rel_context = empty_rel_context_val;
   env_nb_rel = 0;
   env_universes = UGraph.initial_universes;
-  env_qualities = Sorts.QVar.Set.empty;
+  env_qualities = QGraph.initial_graph;
   irr_constants = Cmap_env.empty;
   irr_inds = Indmap_env.empty;
   symb_pats = Cmap_env.empty;
@@ -205,10 +205,10 @@ let record_global_hyps add kn hyps acc =
   else add kn (Context.Named.to_vars hyps) acc
 
 let fold_constants f env acc =
-  Cmap_env.fold (fun c (body,_) acc -> f c body acc) env.env_constants acc
+  Cmap_env.fold (fun c (body,_,_) acc -> f c body acc) env.env_constants acc
 
 let fold_inductives f env acc =
-  Mindmap_env.fold (fun c (body,_) acc -> f c body acc) env.env_inductives acc
+  Mindmap_env.fold (fun c (body,_,_) acc -> f c body acc) env.env_inductives acc
 
 (* Global constants *)
 
@@ -219,7 +219,7 @@ let lookup_constant_key kn env =
     anomaly Pp.(str "Constant " ++ Constant.print kn ++ str" does not appear in the environment.")
 
 let lookup_constant kn env =
-  fst (lookup_constant_key kn env)
+  pi1 (lookup_constant_key kn env)
 
 let mem_constant kn env = Cmap_env.mem kn env.env_constants
 
@@ -244,7 +244,7 @@ let lookup_mind_key kn env =
     anomaly Pp.(str "Inductive " ++ MutInd.print kn ++ str" does not appear in the environment.")
 
 let lookup_mind kn env =
-  fst (lookup_mind_key kn env)
+  pi1 (lookup_mind_key kn env)
 
 let ind_relevance kn env = match Indmap_env.find_opt kn env.irr_inds with
 | None -> Sorts.Relevant
@@ -337,8 +337,8 @@ let universes env = env.env_universes
 let set_universes g env =
   {env with env_universes=g}
 
-let set_qualities qs env =
-  { env with env_qualities = qs }
+let qualities env = env.env_qualities
+let qvars env = QGraph.qvar_domain @@ qualities env
 
 let named_context env = env.env_named_context.env_named_ctx
 let named_context_val env = env.env_named_context
@@ -461,21 +461,16 @@ let add_universes ~strict ctx g =
   in
   UGraph.merge_constraints (UVars.UContext.constraints ctx) g
 
-let add_qualities qs known =
-  let open Sorts.Quality in
-  Array.fold_left (fun known q ->
-      match q with
-      | QVar q ->
-        let known' = Sorts.QVar.Set.add q known in
-        let () = if known == known' then CErrors.anomaly Pp.(str"multiply bound sort quality") in
-        known'
-      | QConstant _ -> CErrors.anomaly Pp.(str "constant quality in ucontext"))
-    known
-    qs
+let set_qualities g env = {env with env_qualities = g}
+
+let map_qualities f env = set_qualities (f env.env_qualities) env
+
+let add_qualities qs g =
+  Array.fold_right QGraph.add_quality qs g
 
 let push_context ?(strict=false) ctx env =
   let qs, _us = UVars.Instance.to_array (UVars.UContext.instance ctx) in
-  let env = { env with env_qualities = add_qualities qs env.env_qualities } in
+  let env = map_qualities (add_qualities qs) env in
   map_universes (add_universes ~strict ctx) env
 
 let add_universes_set ~strict ctx g =
@@ -488,12 +483,16 @@ let add_universes_set ~strict ctx g =
 let push_context_set ?(strict=false) ctx env =
   map_universes (add_universes_set ~strict ctx) env
 
-let push_qualities ctx env =
-  { env with env_qualities = Sorts.QVar.Set.union env.env_qualities ctx }
+let push_qualities qs env =
+  assert Sorts.QVar.Set.(is_empty @@ inter qs (QGraph.qvar_domain env.env_qualities));
+  let g = Sorts.QVar.Set.fold
+            (fun v -> QGraph.add_quality (Sorts.Quality.QVar v)) qs env.env_qualities in
+  set_qualities g env
 
-let push_quality_set qs env =
-  { env with
-    env_qualities = Sorts.QVar.Set.union qs env.env_qualities }
+let set_qualities qs env =
+  let g = QGraph.initial_graph in
+  let g = Sorts.QVar.Set.fold (fun v -> QGraph.add_quality (Sorts.Quality.QVar v)) qs g in
+  { env with env_qualities = g }
 
 let push_subgraph (levels,csts) env =
   let add_subgraph g =
@@ -576,7 +575,7 @@ let no_link_info = NotLinked
 
 let add_constant_key kn cb linkinfo env =
   let new_constants =
-    Cmap_env.add kn (cb,(ref linkinfo, ref None)) env.env_constants in
+    Cmap_env.add kn (cb,(ref linkinfo, ref None), Constant.canonical kn) env.env_constants in
   let irr_constants = if cb.const_relevance != Sorts.Relevant
     then Cmap_env.add kn cb.const_relevance env.irr_constants
     else env.irr_constants
@@ -605,7 +604,7 @@ type const_evaluation_result =
   | NoBody
   | Opaque
   | IsPrimitive of UVars.Instance.t * CPrimitives.t
-  | HasRules of UVars.Instance.t * bool * rewrite_rule list
+  | HasRules of UVars.Instance.t * bool * machine_rewrite_rule list
 
 exception NotEvaluableConst of const_evaluation_result
 
@@ -723,10 +722,10 @@ let lookup_projection p env =
   let mib = lookup_mind mind env in
   (if not (Int.equal mib.mind_nparams (Projection.npars p))
    then anomaly ~label:"lookup_projection" Pp.(str "Bad number of parameters on projection."));
-  match mib.mind_record with
+  match mib.mind_packets.(i).mind_record with
   | NotRecord | FakeRecord -> anomaly ~label:"lookup_projection" Pp.(str "not a projection")
   | PrimRecord infos ->
-    let _,_,rs,typs = infos.(i) in
+    let _,_,rs,typs = infos in
     let arg = Projection.arg p in
     rs.(arg), typs.(arg)
 
@@ -758,7 +757,8 @@ let template_polymorphic_pind (ind,u) env =
   if not (UVars.Instance.is_empty u) then false
   else template_polymorphic_ind ind env
 
-let add_mind_key kn (mind, _ as mind_key) env =
+let add_mind_key kn mind link env =
+  let mind_key = (mind, ref link, MutInd.canonical kn) in
   let new_inds = Mindmap_env.add kn mind_key env.env_inductives in
   let irr_inds = Array.fold_left_i (fun i irr_inds mip ->
       if mip.mind_relevance != Sorts.Relevant
@@ -769,7 +769,7 @@ let add_mind_key kn (mind, _ as mind_key) env =
   { env with inductive_hyps; irr_inds; env_inductives = new_inds }
 
 let add_mind kn mib env =
-  let li = ref no_link_info in add_mind_key kn (mib, li) env
+  let li = no_link_info in add_mind_key kn mib li env
 
 (* Lookup of section variables *)
 
@@ -849,19 +849,20 @@ let keep_hyps env needed =
 (* Modules *)
 
 let add_modtype mp mtb env =
-  let new_modtypes = MPmap.add mp mtb env.env_modtypes in
+  let new_modtypes = ModPath.Map.add mp mtb env.env_modtypes in
   { env with env_modtypes = new_modtypes }
 
 let shallow_add_module mp mb env =
-  let new_mods = MPmap.add mp mb env.env_modules in
+  let () = assert (not @@ ModPath.Map.mem mp env.env_modules) in
+  let new_mods = ModPath.Map.add mp mb env.env_modules in
   { env with env_modules = new_mods }
 
 let lookup_module mp env =
-    MPmap.find mp env.env_modules
+    ModPath.Map.find mp env.env_modules
 
 
 let lookup_modtype mp env =
-  MPmap.find mp env.env_modtypes
+  ModPath.Map.find mp env.env_modtypes
 
 (*s Judgments. *)
 
@@ -966,6 +967,42 @@ let lookup_vm_code idx env =
 let set_retroknowledge env r = { env with retroknowledge = r }
 let retroknowledge env = env.retroknowledge
 
+module type QS =
+sig
+  type t
+  val canonize : env -> t -> t
+end
+
+module type QMapS =
+sig
+  type key
+  type (+'a) t
+  val empty: 'a t
+  val is_empty: 'a t -> bool
+  val mem: env -> key -> 'a t -> bool
+  val add: env -> key -> 'a -> 'a t -> 'a t
+  val remove: env -> key -> 'a t -> 'a t
+  val fold: (key -> 'a -> 'b -> 'b) -> 'a t -> 'b -> 'b
+  val merge: (key -> 'a option -> 'b option -> 'c option) -> 'a t -> 'b t -> 'c t
+  val find: env -> key -> 'a t -> 'a
+  val find_opt : env -> key -> 'a t -> 'a option
+end
+
+module QMap (M : CSig.UMapS) (Q : QS with type t = M.key) : QMapS with type key = M.key =
+struct
+  type key = M.key
+  type 'a t = 'a M.t
+  let empty = M.empty
+  let is_empty = M.is_empty
+  let mem env key m = M.mem (Q.canonize env key) m
+  let add env key v m = M.add (Q.canonize env key) v m
+  let remove env key m = M.remove (Q.canonize env key) m
+  let fold = M.fold
+  let merge = M.merge
+  let find env key m = M.find (Q.canonize env key) m
+  let find_opt env key m = M.find_opt (Q.canonize env key) m
+end
+
 module type QNameS =
 sig
   type t
@@ -975,67 +1012,46 @@ sig
   val canonize : env -> t -> t
 end
 
-module QConstant =
-struct
-  type t = Constant.t
-  let equal _env c1 c2 = Constant.CanOrd.equal c1 c2
-  let compare _env c1 c2 = Constant.CanOrd.compare c1 c2
-  let hash _env c = Constant.CanOrd.hash c
-  let canonize _env c = Constant.canonize c
-end
+module type HackQS = sig
+  (** A type with canonical information separate from the env *)
+  type t
 
-module QMutInd =
-struct
-  type t = MutInd.t
-  let equal _env c1 c2 = MutInd.CanOrd.equal c1 c2
-  let compare _env c1 c2 = MutInd.CanOrd.compare c1 c2
-  let hash _env c = MutInd.CanOrd.hash c
-  let canonize _env c = MutInd.canonize c
-end
-
-module QInd =
-struct
-  type t = Ind.t
-  let equal _env c1 c2 = Ind.CanOrd.equal c1 c2
-  let compare _env c1 c2 = Ind.CanOrd.compare c1 c2
-  let hash _env c = Ind.CanOrd.hash c
-  let canonize _env c = Ind.canonize c
-end
-
-module QConstruct =
-struct
-  type t = Construct.t
-  let equal _env c1 c2 = Construct.CanOrd.equal c1 c2
-  let compare _env c1 c2 = Construct.CanOrd.compare c1 c2
-  let hash _env c = Construct.CanOrd.hash c
-  let canonize _env c = Construct.canonize c
-end
-
-module QProjection =
-struct
-  type t = Projection.t
-  let equal _env c1 c2 = Projection.CanOrd.equal c1 c2
-  let compare _env c1 c2 = Projection.CanOrd.compare c1 c2
-  let hash _env c = Projection.CanOrd.hash c
-  let canonize _env c = Projection.canonize c
-  module Repr =
-  struct
-    type t = Projection.Repr.t
-    let equal _env c1 c2 = Projection.Repr.CanOrd.equal c1 c2
-    let compare _env c1 c2 = Projection.Repr.CanOrd.compare c1 c2
-    let hash _env c = Projection.Repr.CanOrd.hash c
-    let canonize _env c = Projection.Repr.canonize c
+  val canonize : t -> t
+  module CanOrd : sig
+    val equal : t -> t -> bool
+    val compare : t -> t -> int
+    val hash : t -> int
   end
 end
 
-module QGlobRef =
-struct
-  type t = GlobRef.t
-  let equal _env c1 c2 = GlobRef.CanOrd.equal c1 c2
-  let compare _env c1 c2 = GlobRef.CanOrd.compare c1 c2
-  let hash _env c = GlobRef.CanOrd.hash c
-  let canonize _env c = GlobRef.canonize c
+module HackQ (X:HackQS) (UserMap:CSig.UMapS with type key = X.t) = struct
+  module Self = struct
+    type t = X.t
+    let canonize _env x = X.canonize x
+  end
+  include Self
+  let equal _env c1 c2 = X.CanOrd.equal c1 c2
+  let compare _env c1 c2 = X.CanOrd.compare c1 c2
+  let hash _env c = X.CanOrd.hash c
+
+  module Map = QMap(UserMap)(Self)
 end
+
+module QConstant = HackQ(Constant)(Cmap_env)
+
+module QMutInd = HackQ(MutInd)(Mindmap_env)
+
+module QInd = HackQ(Ind)(Indmap_env)
+
+module QConstruct = HackQ(Construct)(Constrmap_env)
+
+module QProjection =
+struct
+  include HackQ(Projection)(HMap.Make(Projection.UserOrd))
+  module Repr = HackQ(Projection.Repr)(HMap.Make(Projection.Repr.UserOrd))
+end
+
+module QGlobRef = HackQ(GlobRef)(GlobRef.Map_env)
 
 module Internal = struct
   let push_template_context uctx env =
@@ -1044,20 +1060,20 @@ module Internal = struct
     let env = map_universes (UGraph.Internal.add_template_qvars qvars) env in
     env
 
-  let is_above_prop env q = UGraph.Internal.is_above_prop env.env_universes q
+  let is_above_prop env = UGraph.Internal.is_above_prop (universes env)
 
   module View =
   struct
     type t = {
       env_constants : constant_key Cmap_env.t;
       env_inductives : mind_key Mindmap_env.t;
-      env_modules : module_body MPmap.t;
-      env_modtypes : module_type_body MPmap.t;
+      env_modules : module_body ModPath.Map.t;
+      env_modtypes : module_type_body ModPath.Map.t;
       env_named_context : named_context_val;
       env_rel_context   : rel_context_val;
       env_universes : UGraph.t;
       env_qualities : Sorts.QVar.Set.t;
-      env_symb_pats : rewrite_rule list Cmap_env.t;
+      env_symb_pats : machine_rewrite_rule list Cmap_env.t;
       env_typing_flags  : typing_flags;
     }
 
@@ -1069,11 +1085,40 @@ module Internal = struct
       env_named_context = env.env_named_context;
       env_rel_context = env.env_rel_context;
       env_universes = env.env_universes;
-      env_qualities = env.env_qualities;
+      env_qualities = QGraph.qvar_domain env.env_qualities;
       env_symb_pats = env.symb_pats;
       env_typing_flags = env.env_typing_flags;
     } [@@ocaml.warning "-42"]
 
   end
+
+  let shallow_overwrite_module mp mb env =
+    let new_mods = ModPath.Map.add mp mb env.env_modules in
+    { env with env_modules = new_mods }
+
+  let rec overwrite_structure mp sign resolver env =
+    let add_field env (l,elem) = match elem with
+      | SFBconst cb ->
+        let c = Mod_subst.constant_of_delta_kn resolver (KerName.make mp l) in
+        add_constant c cb env
+      | SFBmind mib ->
+        let mind = Mod_subst.mind_of_delta_kn resolver (KerName.make mp l) in
+        add_mind mind mib env
+      | SFBmodule mb -> overwrite_module (MPdot (mp, l)) mb env
+      | SFBmodtype mtb -> add_modtype (MPdot (mp, l)) mtb env
+      | SFBrules r -> add_rewrite_rules r.rewrules_rules env
+    in
+    List.fold_left add_field env sign
+
+  and overwrite_module mp mb env =
+    let env = shallow_overwrite_module mp mb env in
+    match mod_type mb with
+    | NoFunctor struc ->
+      let delta = Option.get (Mod_declarations.mod_global_delta mb) in
+      overwrite_structure mp struc delta env
+    | MoreFunctor _ -> env
+
+  let overwrite_module_parameter mbid mtb env =
+    overwrite_module (MPbound mbid) (module_body_of_type mtb) env
 
 end

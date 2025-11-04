@@ -1,9 +1,5 @@
 :orphan:
 
-.. hack to get index in TOC
+.. raw:: html
 
-.. _command_index:
-
------------------
-Command index
------------------
+   <meta http-equiv="refresh" content="0;URL=rocq-cmdindex.html">

@@ -59,6 +59,9 @@ type unify_flags = {
   with_cs : bool
 }
 
+let allow_all_but_rrpat_evars evd =
+  AllowedEvars.except (Evd.get_rewrite_rule_evars evd)
+
 let is_evar_allowed flags evk =
   AllowedEvars.mem flags.allowed_evars evk
 
@@ -111,7 +114,7 @@ let get_polymorphic_positions env sigma f =
       | Some templ -> templ.template_param_arguments)
   | _ -> assert false
 
-let refresh_universes ?(status=univ_rigid) ?(onlyalg=false) ?(refreshset=false)
+let refresh_universes ?(allowed_evars=AllowedEvars.all) ?(status=univ_rigid) ?(onlyalg=false) ?(refreshset=false)
                       pbty env evd t =
   let evdref = ref evd in
   (* direction: true for fresh universes lower than the existing ones *)
@@ -168,7 +171,7 @@ let refresh_universes ?(status=univ_rigid) ?(onlyalg=false) ?(refreshset=false)
        let args' = Array.map (refresh_term_evars ~onevars ~top:false) args in
        if f' == f && args' == args then t
        else mkApp (f', args')
-    | Evar (ev, a) when onevars ->
+    | Evar (ev, a) when onevars && AllowedEvars.mem allowed_evars ev ->
       let evi = Evd.find_undefined !evdref ev in
       let ty = Evd.evar_concl evi in
       let ty' = refresh ~onlyalg univ_flexible ~direction:true ty in
@@ -734,14 +737,14 @@ let make_constructor_subst sigma sign args =
     let a', args = decompose_app sigma a in
     begin match EConstr.kind sigma a' with
     | Construct (cstr, _) ->
-      let l = try Constrmap.find cstr accu with Not_found -> [] in
-      Constrmap.add cstr ((args, id) :: l) accu
+      let l = try Constrmap_env.find cstr accu with Not_found -> [] in
+      Constrmap_env.add cstr ((args, id) :: l) accu
     | _ -> accu
     end
   | LocalAssum _ :: decls, Some (None, args) -> fold decls args accu
   | LocalDef _ :: decls, Some (_, args) -> fold decls args accu
   in
-  fold sign args Constrmap.empty
+  fold sign args Constrmap_env.empty
 
 let make_projectable_subst aliases sigma sign args =
   let evar_aliases = compute_var_aliases sign sigma in
@@ -887,7 +890,7 @@ let materialize_evar define_fun env evd k (evk1,args1) ty_in_env =
     define_evar_from_virtual_equation define_fun env evd src ty_in_env
       ty_t_in_sign sign2 filter2 inst2_in_env in
   let (evd, ev2_in_sign) =
-  let typeclass_candidate = Typeclasses.is_maybe_class_type evd ev2ty_in_sign in
+  let typeclass_candidate = Typeclasses.is_maybe_class_type env evd ev2ty_in_sign in
     (* XXX is this relevance correct? I don't really understand this code *)
     new_pure_evar sign2 ~typeclass_candidate evd ~relevance:(ESorts.relevance_of_sort s) ev2ty_in_sign ~filter:filter2 ~src in
   let ev2_in_env = (ev2_in_sign, inst2_in_env) in
@@ -924,7 +927,7 @@ let check_evar_instance unify flags env evd evk body =
 
 let find_projectable_constructor env evd cstr k args cstr_subst =
   try
-    let l = Constrmap.find cstr cstr_subst in
+    let l = Constrmap_env.find cstr cstr_subst in
     let args = Array.map (lift (-k)) args in
     let l =
       List.filter (fun (args',id) ->

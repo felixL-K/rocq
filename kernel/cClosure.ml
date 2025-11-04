@@ -127,6 +127,7 @@ type evar_handler = {
   evar_expand : constr pexistential -> constr evar_expansion;
   evar_repack : Evar.t * constr list -> constr;
   evar_irrelevant : constr pexistential -> bool;
+  qnorm : Sorts.QVar.t -> Sorts.Quality.t;
   qvar_irrelevant : Sorts.QVar.t -> bool;
 }
 
@@ -134,8 +135,11 @@ let default_evar_handler env = {
   evar_expand = (fun _ -> assert false);
   evar_repack = (fun _ -> assert false);
   evar_irrelevant = (fun _ -> assert false);
+  qnorm = (fun q ->
+      assert (Sorts.QVar.Set.mem q (Environ.qvars env));
+      Sorts.Quality.QVar q);
   qvar_irrelevant = (fun q ->
-      assert (Sorts.QVar.Set.mem q (Environ.qualities env));
+      assert (Sorts.QVar.Set.mem q (Environ.qvars env));
       false);
 }
 
@@ -156,6 +160,8 @@ type clos_infos = {
 let info_flags info = info.i_flags
 let info_env info = info.i_cache.i_env
 let info_univs info = info.i_cache.i_univs
+let info_qnorm info = info.i_cache.i_sigma.qnorm
+let info_elims info = Environ.qualities (info_env info)
 
 let push_relevance infos x =
   { infos with i_relevances = Range.cons x.binder_relevance infos.i_relevances }
@@ -334,7 +340,7 @@ let is_irrelevant info r = match info.i_cache.i_mode with
 
 (************************************************************************)
 
-type table_val = (fconstr * bool array, Empty.t, UVars.Instance.t * bool * rewrite_rule list) constant_def
+type table_val = (fconstr * bool array, Empty.t, UVars.Instance.t * bool * machine_rewrite_rule list) constant_def
 
 module Table : sig
   type t
@@ -613,16 +619,17 @@ let subst_context env ctx =
     let subs = comp_subs el_id env in
     subst_context subs ctx
 
-let it_mkLambda_or_LetIn ctx t =
+let it_mkLambda_or_LetIn infos ctx t =
+  let l = Range.length (info_relevances infos) in
   let open Context.Rel.Declaration in
   match List.rev ctx with
   | [] -> t
   | LocalAssum (n, ty) :: ctx ->
       let assums, ctx = List.map_until (function LocalAssum (n, ty) -> Some (n, ty) | LocalDef _ -> None) ctx in
       let assums = (n, ty) :: assums in
-      { term = FLambda(List.length assums, assums, Term.it_mkLambda_or_LetIn (term_of_fconstr t) (List.rev ctx), (subs_id 0, UVars.Instance.empty)); mark = t.mark }
+      { term = FLambda(List.length assums, assums, Term.it_mkLambda_or_LetIn (term_of_fconstr t) (List.rev ctx), (subs_id l, UVars.Instance.empty)); mark = t.mark }
   | LocalDef _ :: _ ->
-      mk_clos (subs_id 0, UVars.Instance.empty) (Term.it_mkLambda_or_LetIn (term_of_fconstr t) ctx)
+      mk_clos (subs_id l, UVars.Instance.empty) (Term.it_mkLambda_or_LetIn (term_of_fconstr t) ctx)
 
 (* fstrong applies unfreeze_fun recursively on the (freeze) term and
  * yields a term.  Assumes that the unfreeze_fun never returns a
@@ -1437,7 +1444,7 @@ type ('constr, 'stack, 'context, _) depth =
 type 'a patstate = (fconstr, stack, rel_context, 'a) depth
 
 val match_symbol : ('a, 'a patstate) reduction -> clos_infos -> Table.t ->
-  pat_state:(fconstr, stack, rel_context, 'a) depth -> table_key -> UVars.Instance.t * bool * rewrite_rule list -> stack -> 'a
+  pat_state:(fconstr, stack, rel_context, 'a) depth -> table_key -> UVars.Instance.t * bool * machine_rewrite_rule list -> stack -> 'a
 
 val match_head : ('a, 'a patstate) reduction -> clos_infos -> Table.t ->
   pat_state:(fconstr, stack, rel_context, 'a) depth -> (fconstr, stack, rel_context) resume_state -> fconstr -> stack -> 'a
@@ -1612,10 +1619,9 @@ and match_elim : 'a. ('a, 'a patstate) reduction -> _ -> _ -> pat_state:(fconstr
       let ntys_ret = Environ.expand_arity specif (ci.ci_ind, u) pms (fst p) in
       let ntys_brs = Environ.expand_branch_contexts specif u pms brs in
       let prets, pbrss, elims, states = extract_or_kill4 (function [@ocaml.warning "-4"]
-      | PECase (pind, pu, pret, pbrs) :: es, psubst ->
+      | PECase (pind, pret, pbrs) :: es, subst ->
         if not @@ Ind.CanOrd.equal pind ci.ci_ind then None else
-          let subst = UVars.Instance.pattern_match pu u psubst.subst in
-          Option.map (fun subst -> (pret, pbrs, es, { psubst with subst })) subst
+          Some (pret, pbrs, es, subst)
       | _ -> None)
           elims states
       in
@@ -1648,7 +1654,7 @@ and match_elim : 'a. ('a, 'a patstate) reduction -> _ -> _ -> pat_state:(fconstr
 and match_arg : 'a. ('a, 'a patstate) reduction -> _ -> _ -> pat_state:(fconstr, stack, _, 'a) depth -> _ -> _ -> _ -> _ -> _ -> 'a =
   fun red info tab ~pat_state next context states patterns t ->
   let match_deeper = ref false in
-  let t' = it_mkLambda_or_LetIn context t in
+  let t' = it_mkLambda_or_LetIn info context t in
   let patterns, states = Array.split @@ Array.map2
     (function Dead -> fun _ -> Ignore, Dead | (Live ({ subst; _ } as psubst) as state) -> function
       | Ignore -> Ignore, state
@@ -1777,7 +1783,7 @@ and match_head : 'a. ('a, 'a patstate) reduction -> _ -> _ -> pat_state:(fconstr
     assert (na > 0);
     let ptys, pbody, elims, states = extract_or_kill4 (fun ((ptys, pbod, elims), psubst) ->
       let np = Array.length ptys in
-      if np == na then Some (ptys, pbod, elims, psubst) else
+      if np == na then Some (ptys, ERigid pbod, elims, psubst) else
       let fst, lst = Array.chop na ptys in
       Some (fst, ERigid (PHLambda (lst, pbod), []), elims, psubst)
       ) tysbodyelims states

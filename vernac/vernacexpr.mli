@@ -43,7 +43,7 @@ type printable =
   | PrintSectionContext of qualid
   | PrintInspect of int
   | PrintGrammar of string list
-  | PrintCustomGrammar of string
+  | PrintCustomGrammar of qualid
   | PrintKeywords
   | PrintLoadPath of DirPath.t option
   | PrintLibraries
@@ -76,7 +76,7 @@ type printable =
   | PrintStrategy of qualid or_by_notation option
   | PrintRegistered
   | PrintRegisteredSchemes
-  | PrintNotation of Constrexpr.notation_entry * string
+  | PrintNotation of qualid Constrexpr.notation_entry_gen * string
 
 type glob_search_where = InHyp | InConcl | Anywhere
 
@@ -162,15 +162,15 @@ type syntax_modifier =
   | SetItemLevel of string list * Notation_term.notation_binder_kind option * Extend.production_level
   | SetItemScope of string list * scope_name
   | SetLevel of int
-  | SetCustomEntry of string * int option
+  | SetCustomEntry of qualid * int option
   | SetAssoc of Gramlib.Gramext.g_assoc
-  | SetEntryType of string * Extend.simple_constr_prod_entry_key
+  | SetEntryType of string * qualid Extend.simple_constr_prod_entry_key
   | SetOnlyParsing
   | SetOnlyPrinting
   | SetFormat of notation_format
 
 type notation_enable_modifier =
-  | EnableNotationEntry of notation_entry CAst.t
+  | EnableNotationEntry of qualid notation_entry_gen
   | EnableNotationOnly of Notationextern.notation_use
   | EnableNotationAll
 
@@ -209,16 +209,6 @@ type simple_binder = lident list  * constr_expr
 type class_binder = lident * constr_expr list
 type 'a with_coercion = coercion_flag * 'a
 type 'a with_coercion_instance = (Attributes.vernac_flags * coercion_flag * instance_flag) * 'a
-(* Attributes of a record field declaration *)
-type record_field_attr = {
-  rf_coercion: coercion_flag; (* the projection is an implicit coercion *)
-  rf_reversible: bool option; (* coercion is reversible, if relevant *)
-  rf_instance: instance_flag; (* the projection is an instance *)
-  rf_priority: int option; (* priority of the instance, if relevant *)
-  rf_locality: Goptions.option_locality; (* locality of coercion and instance *)
-  rf_notation: notation_declaration list;
-  rf_canonical: bool; (* use this projection in the search for canonical instances *)
-  }
 (* Same before parsing the attributes *)
 type record_field_attr_unparsed = {
   rfu_attrs: Attributes.vernac_flags;
@@ -371,7 +361,7 @@ type synterp_vernac_expr =
   | VernacReservedNotation of infix_flag * (lstring * syntax_modifier CAst.t list)
   | VernacNotation of
       infix_flag * notation_declaration
-  | VernacDeclareCustomEntry of string
+  | VernacDeclareCustomEntry of Id.t
   | VernacBeginSection of lident
   | VernacEndSegment of lident
   | VernacRequire of
@@ -464,8 +454,9 @@ type nonrec synpure_vernac_expr =
   | VernacCreateHintDb of string * bool
   | VernacRemoveHints of string list * qualid list
   | VernacHints of string list * hints_expr
-  | VernacSyntacticDefinition of
+  | VernacAbbreviation of
       lident * (Id.t list * constr_expr) * syntax_modifier CAst.t list
+      * Loc.t option (* warn about old deprecated "Notation" keyword, to remove when removing it *)
   | VernacArguments of
       qualid or_by_notation *
       vernac_argument_status list (* Main arguments status list *) *
@@ -518,7 +509,7 @@ type 'a vernac_expr_gen =
 
 type vernac_expr = synterp_vernac_expr vernac_expr_gen
 
-type control_flag =
+type control_flag_r =
   | ControlTime
   | ControlInstructions
   | ControlProfile of string option
@@ -526,6 +517,8 @@ type control_flag =
   | ControlTimeout of int
   | ControlFail
   | ControlSucceed
+
+type control_flag = control_flag_r CAst.t
 
 type ('a, 'b) vernac_control_gen_r =
   { control : 'a list

@@ -38,7 +38,7 @@ let pp_bracket_comment s = str"{- " ++ hov 0 s ++ str" -}"
    the '\n' character interacts badly with the Format boxing mechanism *)
 
 let preamble table mod_name comment used_modules usf =
-  let pp_import mp = str ("import qualified "^ string_of_modfile table mp) ++ fnl ()
+  let pp_import dp = str ("import qualified "^ string_of_modfile (State.get_table table) dp) ++ fnl ()
   in
   (if not (usf.magic || usf.tunknown) then mt ()
    else
@@ -51,7 +51,7 @@ let preamble table mod_name comment used_modules usf =
   ++
   str "module " ++ pr_upper_id mod_name ++ str " where" ++ fnl2 () ++
   str "import qualified Prelude" ++ fnl () ++
-  prlist pp_import used_modules ++ fnl ()
+  prlist pp_import (DirPath.Set.elements used_modules) ++ fnl ()
   ++
   (if not (usf.magic || usf.tunknown) then mt ()
    else
@@ -117,7 +117,7 @@ let rec pp_type table par vl t =
        with Failure _ -> (str "a" ++ int i))
     | Tglob (r,[]) -> pp_global table Type r
     | Tglob (gr,l)
-        when not (keep_singleton ()) && Rocqlib.check_ref sig_type_name gr ->
+        when not (keep_singleton ()) && Rocqlib.check_ref sig_type_name gr.glob ->
           pp_type table true vl (List.hd l)
     | Tglob (r,l) ->
           pp_par par
@@ -283,8 +283,8 @@ let pp_logical_ind packet =
     (Id.print packet.ip_typename ++ str " : logical inductive" ++ fnl () ++
      str "with constructors : " ++ prvect_with_sep spc Id.print packet.ip_consnames)
 
-let pp_singleton table kn packet =
-  let name = pp_global table Type (GlobRef.IndRef (kn,0)) in
+let pp_singleton table packet =
+  let name = pp_global table Type packet.ip_typename_ref in
   let l = rename_tvars keywords packet.ip_vars in
   hov 2 (str "type " ++ name ++ spc () ++
          prlist_with_sep spc Id.print l ++
@@ -293,7 +293,7 @@ let pp_singleton table kn packet =
          pp_comment (str "singleton inductive, whose constructor was " ++
                      Id.print packet.ip_consnames.(0)))
 
-let pp_one_ind table ip pl cv =
+let pp_one_ind table p pl cv =
   let pl = rename_tvars keywords pl in
   let pp_constructor (r,l) =
     (pp_global table Cons r ++
@@ -304,36 +304,36 @@ let pp_one_ind table ip pl cv =
                   (fun () -> (str " ")) (pp_type table true pl) l))
   in
   str (if Array.is_empty cv then "type " else "data ") ++
-  pp_global table Type (GlobRef.IndRef ip) ++
+  pp_global table Type p.ip_typename_ref ++
   prlist_strict (fun id -> str " " ++ pr_lower_id id) pl ++ str " =" ++
   if Array.is_empty cv then str " () -- empty inductive"
   else
     (fnl () ++ str " " ++
      v 0 (str "  " ++
           prvect_with_sep (fun () -> fnl () ++ str "| ") pp_constructor
-            (Array.mapi (fun i c -> GlobRef.ConstructRef (ip,i+1),c) cv)))
+            (Array.mapi (fun i c -> p.ip_consnames_ref.(i), c) cv)))
 
-let rec pp_ind table first kn i ind =
+let rec pp_ind table first i ind =
   if i >= Array.length ind.ind_packets then
     if first then mt () else fnl ()
   else
-    let ip = (kn,i) in
     let p = ind.ind_packets.(i) in
-    if is_custom (GlobRef.IndRef (kn,i)) then pp_ind table first kn (i+1) ind
+    let ip = p.ip_typename_ref in
+    if is_custom ip then pp_ind table first (i+1) ind
     else
       if p.ip_logical then
-        pp_logical_ind p ++ pp_ind table first kn (i+1) ind
+        pp_logical_ind p ++ pp_ind table first (i+1) ind
       else
-        pp_one_ind table ip p.ip_vars p.ip_types ++ fnl () ++
-        pp_ind table false kn (i+1) ind
+        pp_one_ind table p p.ip_vars p.ip_types ++ fnl () ++
+        pp_ind table false (i+1) ind
 
 
 (*s Pretty-printing of a declaration. *)
 
 let pp_decl table = function
-  | Dind (kn,i) when i.ind_kind == Singleton ->
-      pp_singleton table kn i.ind_packets.(0) ++ fnl ()
-  | Dind (kn,i) -> hov 0 (pp_ind table true kn 0 i)
+  | Dind i when i.ind_kind == Singleton ->
+      pp_singleton table i.ind_packets.(0) ++ fnl ()
+  | Dind i -> hov 0 (pp_ind table true 0 i)
   | Dtype (r, l, t) ->
       if is_inline_custom r then mt ()
       else
@@ -364,7 +364,7 @@ let pp_decl table = function
             (if is_custom r then
                 (names.(i) ++ str " = " ++ str (find_custom r))
              else
-                (pp_function table (empty_env ()) names.(i) defs.(i)))
+                (pp_function table (empty_env table ()) names.(i) defs.(i)))
             ++ fnl2 ())
         rv
   | Dterm (r, a, t) ->
@@ -375,7 +375,7 @@ let pp_decl table = function
           if is_custom r then
             hov 0 (e ++ str " = " ++ str (find_custom r) ++ fnl2 ())
           else
-            hov 0 (pp_function table (empty_env ()) e a ++ fnl2 ())
+            hov 0 (pp_function table (empty_env table ()) e a ++ fnl2 ())
 
 let rec pp_structure_elem table = function
   | (l,SEdecl d) -> pp_decl table d
@@ -391,18 +391,17 @@ and pp_module_expr table = function
       (* should be expanded in extract_env *)
 
 let pp_struct table =
-  let pp_sel (mp,sel) =
-    push_visible mp [];
-    let p = prlist_strict (fun e -> pp_structure_elem table e) sel in
-    pop_visible (); p
-  in
+  let pp_sel (mp,sel) = State.with_visibility table mp [] begin fun table ->
+    prlist_strict (fun e -> pp_structure_elem table e) sel
+  end in
   prlist_strict pp_sel
 
+let file_naming state mp = file_of_modfile (State.get_table state) mp
 
 let haskell_descr = {
   keywords = keywords;
   file_suffix = ".hs";
-  file_naming = string_of_modfile;
+  file_naming = file_naming;
   preamble = preamble;
   pp_struct = pp_struct;
   sig_suffix = None;

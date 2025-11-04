@@ -48,28 +48,29 @@ type signature_mismatch_error =
   | RecordProjectionsExpected of Name.t list
   | NotEqualInductiveAliases
   | IncompatibleUniverses of UGraph.univ_inconsistency
+  | IncompatibleQualities of QGraph.elimination_error
   | IncompatiblePolymorphism of env * types * types
   | IncompatibleConstraints of { got : UVars.AbstractContext.t; expect : UVars.AbstractContext.t }
   | IncompatibleVariance
   | NoRewriteRulesSubtyping
 
 type subtyping_trace_elt =
-  | Submodule of Label.t
+  | Submodule of Id.t
   | FunctorArgument of int
 
 type module_typing_error =
-  | SignatureMismatch of subtyping_trace_elt list * Label.t * signature_mismatch_error
-  | LabelAlreadyDeclared of Label.t
+  | SignatureMismatch of subtyping_trace_elt list * Id.t * signature_mismatch_error
+  | LabelAlreadyDeclared of Id.t
   | NotAFunctor
   | IsAFunctor of ModPath.t
   | IncompatibleModuleTypes of module_type_body * module_type_body
   | NotEqualModulePaths of ModPath.t * ModPath.t
-  | NoSuchLabel of Label.t * ModPath.t
-  | NotAModuleLabel of Label.t
-  | NotAConstant of Label.t
-  | IncorrectWithConstraint of Label.t
-  | GenerativeModuleExpected of Label.t
-  | LabelMissing of Label.t * string
+  | NoSuchLabel of Id.t * ModPath.t
+  | NotAModuleLabel of Id.t
+  | NotAConstant of Id.t
+  | IncorrectWithConstraint of Id.t
+  | GenerativeModuleExpected of Id.t
+  | LabelMissing of Id.t * string
   | IncludeRestrictedFunctor of ModPath.t
 
 exception ModuleTypingError of module_typing_error
@@ -133,9 +134,6 @@ let get_global_delta mb = match mod_global_delta mb with
 
 (** {6 Misc operations } *)
 
-let module_type_of_module = Mod_declarations.module_type_of_module
-let module_body_of_type = Mod_declarations.module_body_of_type
-
 let check_modpath_equiv env mp1 mp2 =
   if ModPath.equal mp1 mp2 then ()
   else
@@ -178,7 +176,7 @@ let rec add_structure mp sign resolver linkinfo env =
           { mib with mind_private = Some true }
         else mib
       in
-      Environ.add_mind_key mind (mib,ref linkinfo) env
+      Environ.add_mind_key mind mib linkinfo env
     | SFBmodule mb -> add_module (MPdot (mp, l)) mb linkinfo env (* adds components as well *)
     | SFBmodtype mtb -> Environ.add_modtype (MPdot (mp, l)) mtb env
     | SFBrules r -> Environ.add_rewrite_rules r.rewrules_rules env
@@ -273,11 +271,12 @@ let rec strengthen_and_subst_module mb subst mp_from mp_to =
         strengthen_and_subst_struct struc subst
           mp_from mp_to false false delta_mb
       in
-      let reso' = add_mp_delta_resolver mp_to mp_from reso' in
+      (* Don't forget to add the original resolver up to substitution *)
+      let reso' = add_delta_resolver (subst_dom_delta_resolver subst delta_mb) (add_mp_delta_resolver mp_to mp_from reso') in
       strengthen_module_body ~src:mp_from (NoFunctor struc') reso' mb
   | MoreFunctor _ ->
     let subst = add_mp mp_from mp_to (empty_delta_resolver mp_to) subst in
-    subst_module subst_dom subst mp_from mb
+    subst_module subst_dom_codom subst mp_from mb
 
 and strengthen_and_subst_struct struc subst mp_from mp_to alias incl reso =
   let strengthen_and_subst_field reso' item = match item with
@@ -398,14 +397,14 @@ let subst_modtype_signature_and_resolver mp_from mp_to sign reso =
 
 let rec collect_mbid l sign =  match sign with
   | MoreFunctor (mbid,ty,m) ->
-    let m' = collect_mbid (MBIset.add mbid l) m in
+    let m' = collect_mbid (MBId.Set.add mbid l) m in
     if m==m' then sign else MoreFunctor (mbid,ty,m')
   | NoFunctor struc ->
     let struc' = clean_structure l struc in
     if struc==struc' then sign else NoFunctor struc'
 
 let clean_bounded_mod_expr sign =
-  if is_functor sign then collect_mbid MBIset.empty sign else sign
+  if is_functor sign then collect_mbid MBId.Set.empty sign else sign
 
 (** {6 Building map of constants to inline } *)
 

@@ -238,6 +238,11 @@ VERNAC COMMAND EXTEND HintRewrite CLASSIFIED BY { classify_hint }
   { add_rewrite_hint ~locality ~poly:polymorphic ["core"] o (Some t) l }
 END
 
+VERNAC COMMAND EXTEND HintCreateRewriteDb CLASSIFIED BY { classify_hint }
+| #[ locality = Synterp.module_locality ] [ "Create" "Rewrite" "HintDb" ident(id) ] ->
+  { create_rewrite_hint_db ~local:locality ~name:(Id.to_string id) }
+END
+
 (**********************************************************************)
 (* Refine                                                             *)
 
@@ -458,11 +463,6 @@ TACTIC EXTEND specialize_eqs
 | [ "specialize_eqs" hyp(id) ] -> { specialize_eqs id }
 END
 
-TACTIC EXTEND destauto DEPRECATED { Deprecation.make ~since:"8.20" () }
-| [ "destauto" ] -> { Internals.destauto }
-| [ "destauto" "in" hyp(id) ] -> { Internals.destauto_in id }
-END
-
 (**********************************************************************)
 
 (**********************************************************************)
@@ -669,13 +669,6 @@ END
 
 VERNAC COMMAND EXTEND Print_keys CLASSIFIED AS QUERY
 | [ "Print" "Equivalent" "Keys" ] -> { Feedback.msg_notice (Keys.pr_keys Printer.pr_global) }
-END
-
-VERNAC COMMAND EXTEND OptimizeProof
-| ![ proof ] [ "Optimize" "Proof" ] => { classify_as_proofstep } ->
-  { fun ~pstate -> Declare.Proof.compact pstate }
-| [ "Optimize" "Heap" ] => { classify_as_proofstep } ->
-  { Gc.compact () }
 END
 
 TACTIC EXTEND optimize_heap

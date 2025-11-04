@@ -109,21 +109,23 @@ let rec get_holes_profiles env nargs ndecls lincheck el =
 
 and get_holes_profiles_elim env nargs ndecls lincheck = function
   | PEApp args -> Array.fold_left (get_holes_profiles_parg env nargs ndecls) lincheck args
-  | PECase (ind, u, ret, brs) ->
+  | PECase (ind, ret, brs) ->
       let mib, mip = Inductive.lookup_mind_specif env ind in
-      let lincheck = check_instance_mask env mib.mind_universes u lincheck in
       let lincheck = get_holes_profiles_parg env (nargs + mip.mind_nrealargs + 1) (ndecls + mip.mind_nrealdecls + 1) lincheck ret in
       Array.fold_left3 (fun lincheck nargs_b ndecls_b -> get_holes_profiles_parg env (nargs + nargs_b) (ndecls + ndecls_b) lincheck) lincheck mip.mind_consnrealargs mip.mind_consnrealdecls brs
   | PEProj proj ->
       let () = lookup_projection (Projection.make proj false) env |> ignore in
       lincheck
 
+and get_holes_profiles_headelim env nargs ndecls lincheck (h, el) =
+  let lincheck = get_holes_profiles_head env nargs ndecls lincheck h in
+  get_holes_profiles env nargs ndecls lincheck el
+
 and get_holes_profiles_parg env nargs ndecls lincheck = function
   | EHoleIgnored -> lincheck
   | EHole i -> Partial_subst.add_term i nargs lincheck
-  | ERigid (h, el) ->
-      let lincheck = get_holes_profiles_head env nargs ndecls lincheck h in
-      get_holes_profiles env nargs ndecls lincheck el
+  | ERigid hel ->
+      get_holes_profiles_headelim env nargs ndecls lincheck hel
 
 and get_holes_profiles_head env nargs ndecls lincheck = function
   | PHRel n -> if n <= ndecls then lincheck else Type_errors.error_unbound_rel env n
@@ -144,7 +146,11 @@ and get_holes_profiles_head env nargs ndecls lincheck = function
       |> Partial_subst.maybe_add_quality qio ()
       |> Partial_subst.maybe_add_univ uio ()
   | PHSort _ -> lincheck
-  | PHLambda (tys, bod) | PHProd (tys, bod) ->
+  | PHLambda (tys, bod) ->
+      let lincheck = Array.fold_left_i (fun i -> get_holes_profiles_parg env (nargs + i) (ndecls + i)) lincheck tys in
+      let lincheck = get_holes_profiles_headelim env (nargs + Array.length tys) (ndecls + Array.length tys) lincheck bod in
+      lincheck
+  | PHProd (tys, bod) ->
       let lincheck = Array.fold_left_i (fun i -> get_holes_profiles_parg env (nargs + i) (ndecls + i)) lincheck tys in
       let lincheck = get_holes_profiles_parg env (nargs + Array.length tys) (ndecls + Array.length tys) lincheck bod in
       lincheck
@@ -166,7 +172,7 @@ let check_rhs env holes_profile rhs =
   check 0 rhs
 
 let check_rewrite_rule env lab i (symb, rule) =
-  Flags.if_verbose Feedback.msg_notice (str "  checking rule:" ++ Label.print lab ++ str"#" ++ Pp.int i);
+  Flags.if_verbose Feedback.msg_notice (str "  checking rule:" ++ Id.print lab ++ str"#" ++ Pp.int i);
   let { nvars; lhs_pat; rhs } = rule in
   let symb_cb = Environ.lookup_constant symb env in
   let () =
@@ -217,9 +223,8 @@ let rec check_mexpr env opac mse mp_mse res = match mse with
   | MEapply (f,mp) ->
     let sign, delta = check_mexpr env opac f mp_mse res in
     let farg_id, farg_b, fbody_b = Modops.destr_functor sign in
-    let mtb = Modops.module_type_of_module (lookup_module mp env) in
-    let state = (Environ.universes env, Conversion.checked_universes) in
-    let _ : UGraph.t = Subtyping.check_subtypes state env mp mtb (MPbound farg_id) farg_b in
+    let state = (Environ.universes env, Conversion.checked_universes env) in
+    let _ : UGraph.t = Subtyping.check_subtypes state env mp (MPbound farg_id) farg_b in
     let subst = Mod_subst.map_mbid farg_id mp (Mod_subst.empty_delta_resolver mp) in
     Modops.subst_signature subst mp_mse fbody_b, Mod_subst.subst_codom_delta_resolver subst delta
   | MEwith _ -> CErrors.user_err Pp.(str "Unsupported 'with' constraint in module implementation")
@@ -240,12 +245,12 @@ let rec check_module env opac mp mb opacify =
     check_signature env opac (mod_type mb) mp delta_mb opacify
   in
   let optsign, opac = match Mod_declarations.mod_expr mb with
-    | Struct sign_struct ->
+    | Struct (reso, sign_struct) ->
       let opacify = collect_constants_without_body (mod_type mb) mp opacify in
       (* TODO: a bit wasteful, we recheck the types of parameters twice *)
       let sign_struct = Modops.annotate_struct_body sign_struct (mod_type mb) in
-      let opac = check_signature env opac sign_struct mp delta_mb opacify in
-      Some (sign_struct, delta_mb), opac
+      let opac = check_signature env opac sign_struct mp reso opacify in
+      Some (sign_struct, reso), opac
     | Algebraic me -> Some (check_mexpression env opac me (mod_type mb) mp delta_mb), opac
     | Abstract|FullStruct -> None, opac
   in
@@ -254,8 +259,9 @@ let rec check_module env opac mp mb opacify =
   | Some (sign,delta) ->
     let mtb1 = mk_mtb sign delta
     and mtb2 = mk_mtb (mod_type mb) delta_mb in
-    let state = (Environ.universes env, Conversion.checked_universes) in
-    let _ : UGraph.t = Subtyping.check_subtypes state env mp mtb1 mp mtb2 in
+    let state = (Environ.universes env, Conversion.checked_universes env) in
+    let env = Modops.add_module mp (module_body_of_type mtb1) env in
+    let _ : UGraph.t = Subtyping.check_subtypes state env mp mp mtb2 in
     ()
   in
   opac

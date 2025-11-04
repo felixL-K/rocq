@@ -92,7 +92,10 @@ let type_vernac opn converted_args ?loc ~atts =
 
 (** VERNAC EXTEND registering *)
 
-type classifier = Genarg.raw_generic_argument list -> vernac_classification
+type classifier =
+  Genarg.raw_generic_argument list ->
+  atts:Attributes.vernac_flags ->
+  vernac_classification
 
 (** Classifiers  *)
 module StringPair =
@@ -119,7 +122,7 @@ let classify_as_sideeff = VtSideff ([], VtLater)
 let classify_as_proofstep = VtProofStep { proof_block_detection = None}
 
 type (_, _) ty_sig =
-| TyNil : (vernac_command, vernac_classification) ty_sig
+| TyNil : (vernac_command, atts:Attributes.vernac_flags -> vernac_classification) ty_sig
 | TyTerminal : string * ('r, 's) ty_sig -> ('r, 's) ty_sig
 | TyNonTerminal : ('a, 'b, 'c) Extend.ty_user_symbol * ('r, 's) ty_sig -> ('a -> 'r, 'a -> 's) ty_sig
 
@@ -165,9 +168,9 @@ let rec untype_command : type r s. (r, s) ty_sig -> r -> plugin_args -> vernac_c
 let rec untype_user_symbol : type s a b c. (a, b, c) Extend.ty_user_symbol -> (s, Gramlib.Grammar.norec, a) Procq.Symbol.t =
   let open Extend in function
   | TUlist1 l -> Procq.Symbol.list1 (untype_user_symbol l)
-  | TUlist1sep (l, s) -> Procq.Symbol.list1sep (untype_user_symbol l) (Procq.Symbol.tokens [Procq.TPattern (Procq.terminal s)]) false
+  | TUlist1sep (l, s) -> Procq.Symbol.list1sep (untype_user_symbol l) (Procq.Symbol.tokens [Procq.TPattern (Procq.terminal s)])
   | TUlist0 l -> Procq.Symbol.list0 (untype_user_symbol l)
-  | TUlist0sep (l, s) -> Procq.Symbol.list0sep (untype_user_symbol l) (Procq.Symbol.tokens [Procq.TPattern (Procq.terminal s)]) false
+  | TUlist0sep (l, s) -> Procq.Symbol.list0sep (untype_user_symbol l) (Procq.Symbol.tokens [Procq.TPattern (Procq.terminal s)])
   | TUopt o -> Procq.Symbol.opt (untype_user_symbol o)
   | TUentry a -> Procq.Symbol.nterm (Procq.genarg_grammar (Genarg.ExtraArg a))
   | TUentryl (a, i) -> Procq.Symbol.nterml (Procq.genarg_grammar (Genarg.ExtraArg a)) (string_of_int i)
@@ -199,7 +202,7 @@ let static_vernac_extend ~plugin ~command ?classifier ?entry ext =
   | Some cl -> untype_classifier ty cl
   | None ->
     match classifier with
-    | Some cl -> fun _ -> cl command
+    | Some cl -> fun _ ~atts -> cl ~atts command
     | None ->
       let e = match entry with
       | None -> "COMMAND"
@@ -272,7 +275,7 @@ let vernac_argument_extend ~plugin ~name arg =
     let e = Procq.create_generic_entry2 name (Genarg.rawwit wit) in
     let plugin_uid = Option.map (fun plugin -> (plugin, "vernacargextend:"^name)) plugin in
     let () = Egramml.grammar_extend ?plugin_uid e
-        (Procq.Fresh (Gramlib.Gramext.First, [None, None, rules]))
+        (Procq.Fresh (Gramlib.Gramext.First, [None, Some RightA, rules]))
     in
     e
   in

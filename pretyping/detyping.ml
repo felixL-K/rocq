@@ -270,8 +270,8 @@ module PrintingInductiveMake =
   end) ->
   struct
     type t = inductive
-    module Set = Indset
-    let encode = Test.encode
+    module Set = Indset_env
+    let encode env ind = Environ.QInd.canonize env (Test.encode env ind)
     let subst subst obj = subst_ind subst obj
     let check_local _ _ = ()
     let discharge (i:t) = i
@@ -909,7 +909,7 @@ and detype_r d flags avoid env sigma t =
     | Proj (p,_,c) ->
       if Projection.unfolded p && print_unfolded_primproj_asmatch () then
         let c = detype d flags avoid env sigma c in
-        let id = Label.to_id @@ Projection.label p in
+        let id = Projection.label p in
         let nargs, parg =
           try
             let _, mip = Global.lookup_inductive (Projection.inductive p) in

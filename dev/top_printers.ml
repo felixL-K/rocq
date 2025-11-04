@@ -38,7 +38,6 @@ let ppfuture kx = pp (Future.print (fun _ -> str "_") kx)
 
 (* name printers *)
 let ppid id = pp (Id.print id)
-let pplab l = pp (Label.print l)
 let ppmbid mbid = pp (str (MBId.debug_to_string mbid))
 let ppdir dir = pp (DirPath.print dir)
 let ppmp mp = pp(str (ModPath.debug_to_string mp))
@@ -129,12 +128,12 @@ let ppintmapgen l = pp (printmapgen l)
 let ppmpmapgen l =
   pp (prmapgen
         (fun mp -> str (ModPath.debug_to_string mp))
-        (MPset.elements (MPmap.domain l)))
+        (ModPath.Set.elements (ModPath.Map.domain l)))
 
 let ppdpmapgen l =
   pp (prmapgen
         (fun mp -> str (DirPath.to_string mp))
-        (DPset.elements (DPmap.domain l)))
+        (DirPath.Set.elements (DirPath.Map.domain l)))
 
 let ppconmapenvgen l =
   pp (prmapgen
@@ -283,6 +282,7 @@ let prqvar q = UnivNames.pr_quality_with_global_universes q
 let ppqvarset l = pp (hov 1 (str "{" ++ prlist_with_sep spc prqvar (QVar.Set.elements l) ++ str "}"))
 let ppuniverse_set l = pp (Level.Set.pr prlev l)
 let ppuniverse_instance l = pp (Instance.pr prqvar prlev l)
+let ppuniverse_einstance l = ppuniverse_instance (EConstr.Unsafe.to_instance l)
 let ppuniverse_context l = pp (pr_universe_context prqvar prlev l)
 let ppuniverse_context_set l = pp (ContextSet.pr prlev l)
 let ppuniverse_subst l = pp (UnivSubst.pr_universe_subst Level.raw_pr l)
@@ -291,6 +291,7 @@ let ppqvar_subst l = pp (UVars.pr_quality_level_subst QVar.raw_pr l)
 let ppuniverse_level_subst l = pp (Univ.pr_universe_level_subst Level.raw_pr l)
 let ppustate l = pp (UState.pr l)
 let ppconstraints c = pp (Constraints.pr Level.raw_pr c)
+let ppqconstraints c = pp (ElimConstraints.pr QVar.raw_pr c)
 let ppuniverseconstraints c = pp (UnivProblem.Set.pr c)
 let ppuniverse_context_future c =
   let ctx = Future.force c in
@@ -664,7 +665,7 @@ let () =
   let ty_constr = Extend.TUentry (get_arg_tag Stdarg.wit_constr) in
   let cmd_sig = TyTerminal("PrintConstr", TyNonTerminal(ty_constr, TyNil)) in
   let cmd_fn c ?loc:_ ~atts () = vtdefault (fun () -> in_current_context econstr_display c) in
-  let cmd_class _ = VtQuery in
+  let cmd_class _ ~atts:_ = VtQuery in
   let cmd : ty_ml = TyML (false, cmd_sig, cmd_fn, Some cmd_class) in
   static_vernac_extend ~plugin:None ~command:"PrintConstr" [cmd]
 
@@ -674,7 +675,7 @@ let () =
   let ty_constr = Extend.TUentry (get_arg_tag Stdarg.wit_constr) in
   let cmd_sig = TyTerminal("PrintPureConstr", TyNonTerminal(ty_constr, TyNil)) in
   let cmd_fn c ?loc:_ ~atts () = vtdefault (fun () -> in_current_context print_pure_econstr c) in
-  let cmd_class _ = VtQuery in
+  let cmd_class _ ~atts:_ = VtQuery in
   let cmd : ty_ml = TyML (false, cmd_sig, cmd_fn, Some cmd_class) in
   static_vernac_extend ~plugin:None ~command:"PrintPureConstr" [cmd]
 
@@ -693,27 +694,27 @@ let encode_path ?loc prefix mpdir suffix id =
 let raw_string_of_ref ?loc _ = let open GlobRef in function
   | ConstRef cst ->
       let (mp,id) = KerName.repr (Constant.user cst) in
-      encode_path ?loc "CST" (Some mp) [] (Label.to_id id)
+      encode_path ?loc "CST" (Some mp) [] id
   | IndRef (kn,i) ->
       let (mp,id) = KerName.repr (MutInd.user kn) in
-      encode_path ?loc "IND" (Some mp) [Label.to_id id]
+      encode_path ?loc "IND" (Some mp) [id]
         (Id.of_string ("_"^string_of_int i))
   | ConstructRef ((kn,i),j) ->
       let (mp,id) = KerName.repr (MutInd.user kn) in
       encode_path ?loc "CSTR" (Some mp)
-        [Label.to_id id;Id.of_string ("_"^string_of_int i)]
+        [id;Id.of_string ("_"^string_of_int i)]
         (Id.of_string ("_"^string_of_int j))
   | VarRef id ->
       encode_path ?loc "SECVAR" None [] id
 
 let short_string_of_ref ?loc _ = let open GlobRef in function
   | VarRef id -> qualid_of_ident ?loc id
-  | ConstRef cst -> qualid_of_ident ?loc (Label.to_id (Constant.label cst))
-  | IndRef (kn,0) -> qualid_of_ident ?loc (Label.to_id (MutInd.label kn))
+  | ConstRef cst -> qualid_of_ident ?loc (Constant.label cst)
+  | IndRef (kn,0) -> qualid_of_ident ?loc (MutInd.label kn)
   | IndRef (kn,i) ->
-      encode_path ?loc "IND" None [Label.to_id (MutInd.label kn)]
+      encode_path ?loc "IND" None [MutInd.label kn]
         (Id.of_string ("_"^string_of_int i))
   | ConstructRef ((kn,i),j) ->
       encode_path ?loc "CSTR" None
-        [Label.to_id (MutInd.label kn);Id.of_string ("_"^string_of_int i)]
+        [MutInd.label kn; Id.of_string ("_"^string_of_int i)]
         (Id.of_string ("_"^string_of_int j))

@@ -20,6 +20,8 @@ module type Point = sig
   val compare : t -> t -> int
 
   val raw_pr : t -> Pp.t
+
+  val anomaly_err : t -> Pp.t
 end
 
 module Make (Point:Point) = struct
@@ -184,8 +186,7 @@ module Make (Point:Point) = struct
   let repr_node g u =
     try repr g (Index.find u g.table)
     with Not_found ->
-      CErrors.anomaly ~label:"Univ.repr"
-        Pp.(str"Universe " ++ Point.raw_pr u ++ str" undefined.")
+      CErrors.anomaly (Point.anomaly_err u)
 
   exception AlreadyDeclared
 
@@ -355,6 +356,12 @@ module Make (Point:Point) = struct
     let status = Status.create g in
     status, find_to_merge status g x v
 
+  let rec find_max_rank cur accu l = match l with
+  | [] -> cur, accu
+  | hd :: tl ->
+    if hd.rank > cur.rank then find_max_rank hd (cur :: accu) tl
+    else find_max_rank cur (hd :: accu) tl
+
   let get_new_edges g to_merge =
     (* Computing edge sets. *)
     let ltle =
@@ -367,9 +374,11 @@ module Make (Point:Point) = struct
         in
         PMap.fold fold n.ltle acc
       in
-      match to_merge with
+      let max, rem = match to_merge with
       | [] -> assert false
-      | hd :: tl -> List.fold_left fold hd.ltle tl
+      | hd :: tl -> find_max_rank hd [] tl
+      in
+      List.fold_left fold max.ltle rem
     in
     let ltle, _ = clean_ltle g ltle in
     let fold accu a =

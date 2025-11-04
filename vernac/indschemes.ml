@@ -144,7 +144,7 @@ let declare_one_case_analysis_scheme ?loc ind =
       Some Names.(Id.of_string (Id.to_string mip.mind_typename ^ "_" ^ suff))
   in
   let kelim = Inductiveops.elim_sort (mib,mip) in
-  if Sorts.Quality.eliminates_to kelim Sorts.Quality.qtype then
+  if Inductive.raw_eliminates_to kelim Sorts.Quality.qtype then
     define_individual_scheme ?loc dep id ind
 
 (* Induction/recursion schemes *)
@@ -281,7 +281,8 @@ let name_and_process_scheme env = function
     let newref = CAst.make newid in
     (newref,sch_type, ind, sch_sort)
 
-let do_mutual_scheme ?(force_mutual=false) env l =
+let do_scheme ~register ?(force_mutual=false) env l =
+  let l = List.map (name_and_process_scheme env) l in
   match l with
   (* if calling with one inductiv try define individual scheme *)
   | ({CAst.v},kind,(mutind,i as ind),sort)::[] ->
@@ -297,12 +298,8 @@ let do_mutual_scheme ?(force_mutual=false) env l =
     with Not_found -> CErrors.user_err Pp.(str "Mutually defined schemes should be recursive."))
   | _ -> (failwith "do_mutual_scheme expects a non empty list of inductive types.")
 
-let do_scheme env l =
-  let lnamedepindsort = List.map (name_and_process_scheme env) l in
-  do_mutual_scheme env lnamedepindsort
-
 (* TODO : redifine do_mutual_induction_scheme using do_mutual_scheme *)
-let _do_mutual_induction_scheme ?(force_mutual=false) env ?(isrec=true) l =
+let do_mutual_induction_scheme ~register ?(force_mutual=false) env ?(isrec=true) l =
   let sigma, inst =
     let _,_,ind,_ = match l with | x::_ -> x | [] -> assert false in
     let _, ctx = Typeops.type_of_global_in_context env (Names.GlobRef.IndRef ind) in
@@ -333,6 +330,7 @@ let _do_mutual_induction_scheme ?(force_mutual=false) env ?(isrec=true) l =
     let _,_,ind,_ = List.hd l in
     Global.is_polymorphic (Names.GlobRef.IndRef ind)
   in
+  let is_mutual = isrec && List.length listdecl > 1 in
   let declare decl ({CAst.v=fi; loc},dep,ind, sort) =
     let decltype = Retyping.get_type_of env sigma decl in
     let decltype = EConstr.to_constr sigma decltype in
@@ -341,7 +339,9 @@ let _do_mutual_induction_scheme ?(force_mutual=false) env ?(isrec=true) l =
     let kind =
       let open Elimschemes in
       let open UnivGen.QualityOrSet in
-      if isrec then Some (elim_scheme ~dep ~to_kind:sort)
+      if not register then None
+      else if is_mutual then None (* don't make induction use mutual schemes *)
+      else if isrec then Some (elim_scheme ~dep ~to_kind:sort)
       else match sort with
         | Qual (QConstant QType) -> Some (if dep then case_dep else case_nodep)
         | Qual (QConstant QProp) -> Some (if dep then casep_dep else casep_nodep)
@@ -384,6 +384,7 @@ let build_combined_scheme env schemes =
   let sigma = Evd.from_env env in
   let sigma, defs = List.fold_left_map (fun sigma cst ->
     let sigma, c = Evd.fresh_constant_instance env sigma cst in
+    let c = on_snd (EConstr.EInstance.kind sigma) c in
     sigma, (c, Typeops.type_of_constant_in env c)) sigma schemes in
   let find_inductive ty =
     let (ctx, arity) = decompose_prod ty in

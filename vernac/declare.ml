@@ -254,7 +254,7 @@ let make_univs_immediate_default ~poly ~opaque ~uctx ~udecl ~eff ~used_univs bod
          Not sure if it makes more sense to merge them in the ustate
          before restrict/check_univ_decl or here. Since we only do it
          when monomorphic it shouldn't really matter. *)
-      Monomorphic_entry (Univ.ContextSet.union uctx (Safe_typing.universes_of_private eff.Evd.seff_private)), snd utyp
+      Monomorphic_entry (Univ.ContextSet.union uctx (Safe_typing.universes_of_private (Evd.seff_private eff))), snd utyp
   in
   uctx, utyp, used_univs, Default { body = (body, eff); opaque = if opaque then Opaque Univ.ContextSet.empty else Transparent }
 
@@ -422,7 +422,7 @@ let open_constant i ((sp,kn), obj) =
     Nametab.push (Nametab.Exactly i) sp (GlobRef.ConstRef con)
 
 let exists_name id =
-  Decls.variable_exists id || Global.exists_objlabel (Label.of_id id)
+  Decls.variable_exists id || Global.exists_objlabel id
 
 let check_exists id =
   if exists_name id then
@@ -454,7 +454,7 @@ let inConstant v = Libobject.Dyn.Easy.inj v objConstant
 (* Register the libobjects attached to the constants *)
 let register_constant loc cst kind ?user_warns local =
   (* Register the declaration *)
-  let id = Label.to_id (Constant.label cst) in
+  let id = Constant.label cst in
   let loc = fallback_loc id loc in
   let o = inConstant (id, { cst_kind = kind; cst_locl = local; cst_warn = user_warns; cst_loc = loc; }) in
   let () = Lib.add_leaf o in
@@ -462,29 +462,47 @@ let register_constant loc cst kind ?user_warns local =
   Impargs.declare_constant_implicits cst;
   Notation.declare_ref_arguments_scope (GlobRef.ConstRef cst)
 
-let register_side_effect (c, body, role) =
+let register_side_effect (c, body, role, univs) =
   (* Register the body in the opaque table *)
   let () = match body with
   | None -> ()
   | Some opaque -> Opaques.declare_private_opaque opaque
   in
-  let id = Label.to_id @@ Constant.label c in
+  let id = Constant.label c in
   let () = register_constant (fallback_loc ~warn:false id None) c Decls.(IsProof Theorem) Locality.ImportDefaultBehavior in
+  let () = match univs with
+  | None -> ()
+  | Some univs -> DeclareUniv.declare_univ_binders (ConstRef c) univs
+  in
   match role with
   | None -> ()
   | Some (Evd.Schema (ind, kind)) -> DeclareScheme.declare_scheme SuperGlobal kind (ind,c)
 
 let get_roles export eff =
   let map (c, body) =
-    let role = try Some (Cmap.find c eff.Evd.seff_roles) with Not_found -> None in
-    (c, body, role)
+    let role = try Some (Cmap_env.find c (Evd.seff_roles eff)) with Not_found -> None in
+    let univs = try Some (Cmap_env.find c (Evd.seff_univs eff)) with Not_found -> None in
+    (c, body, role, univs)
   in
   List.map map export
 
 let export_side_effects eff =
-  let export = Global.export_private_constants eff.Evd.seff_private in
+  let export = Global.export_private_constants (Evd.seff_private eff) in
   let export = get_roles export eff in
   List.iter register_side_effect export
+
+let register_side_effects pf =
+  (* TODO: factorize this with [register_side_effect] above *)
+  let open Names in
+  let eff = Evd.eval_side_effects (Proof.data pf).Proof.sigma in
+  let cst = Safe_typing.constants_of_private (Evd.seff_private eff) in
+  let iter kn =
+    let gr = GlobRef.ConstRef kn in
+    let id = Constant.label kn in
+    let sp = Lib.make_path id in
+    Nametab.push (Nametab.Until 1) sp gr
+  in
+  List.iter iter cst
 
 let record_aux env s_ty s_bo =
   let open Environ in
@@ -586,14 +604,14 @@ let declare_constant ~loc ?(local = Locality.ImportDefaultBehavior) ~name ~kind 
         let () = Global.push_context_set ctx in
         Entries.DefinitionEntry e, false, ubinders, None, ctx
       | Default { body = (body, eff); opaque = Opaque body_uctx } ->
-        let body = ((body, body_uctx), eff.Evd.seff_private) in
+        let body = ((body, body_uctx), Evd.seff_private eff) in
         let de = { de with proof_entry_body = body } in
         let cd, ctx = cast_opaque_proof_entry ImmediateEffectEntry de in
         let ubinders = make_ubinders ctx de.proof_entry_universes in
         let () = Global.push_context_set ctx in
         Entries.OpaqueEntry cd, false, ubinders, Some (Future.from_val body, None), ctx
       | DeferredOpaque { body; feedback_id } ->
-        let map (body, eff) = body, eff.Evd.seff_private in
+        let map (body, eff) = body, Evd.seff_private eff in
         let body = Future.chain body map in
         let de = { de with proof_entry_body = body } in
         let cd, ctx = cast_opaque_proof_entry DeferredEffectEntry de in
@@ -665,7 +683,7 @@ let declare_constant ~loc ?(local = Locality.ImportDefaultBehavior) ~name ~kind 
   if unsafe || is_unsafe_typing_flags typing_flags then feedback_axiom();
   kn
 
-let declare_private_constant ?role ~name ~opaque de effs =
+let declare_private_constant ?role ~name ~opaque de effs senv =
   let de, ctx =
     if not opaque then
       let de, ctx = cast_pure_proof_entry de in
@@ -675,21 +693,16 @@ let declare_private_constant ?role ~name ~opaque de effs =
       OpaqueEff de, ctx
 
   in
-  let kn, eff = Global.add_private_constant name ctx de in
-  let () = if Univ.Level.Set.is_empty (fst ctx) then ()
-    else DeclareUniv.declare_univ_binders (ConstRef kn)
-        (Monomorphic_entry ctx, UnivNames.empty_binders)
+  let univs =
+    if Univ.Level.Set.is_empty (fst ctx) then None
+    else Some (UState.Monomorphic_entry ctx, UnivNames.empty_binders)
   in
-  let seff_roles = match role with
-  | None -> effs.Evd.seff_roles
-  | Some r -> Cmap.add kn r effs.Evd.seff_roles
-  in
-  let seff_private = Safe_typing.concat_private eff effs.Evd.seff_private in
-  let effs = { Evd.seff_private; Evd.seff_roles } in
-  kn, effs
+  let (kn, eff), senv = Safe_typing.add_private_constant name ctx de senv in
+  let effs = Evd.push_side_effects eff ?univs ?role effs in
+  kn, effs, senv
 
 let inline_private_constants ~uctx env (body, eff) =
-  let body, ctx = Safe_typing.inline_private_constants env (body, eff.Evd.seff_private) in
+  let body, ctx = Safe_typing.inline_private_constants env (body, Evd.seff_private eff) in
   let uctx = UState.merge ~sideff:true Evd.univ_rigid uctx ctx in
   body, uctx
 
@@ -837,6 +850,10 @@ module Internal = struct
 
   let export_side_effects = export_side_effects
 
+  let register_side_effects pf =
+    let () = register_side_effects pf in
+    pf
+
 end
 
 (* The word [proof] is to be understood as [justification] *)
@@ -899,15 +916,19 @@ let ustate_of_proof = function
   | DefaultProof { proof = (_entries, uctx) } -> uctx
   | DeferredOpaqueProof { initial_euctx } -> initial_euctx
 
-let declare_definition_scheme ~internal ~univs ~role ~name ~effs ?loc c =
-  let kind = Decls.(IsDefinition Scheme) in
+let declare_definition_scheme ~univs ~role ~name ~effs:(effs, senv) c =
   let entry = pure_definition_entry ~univs c in
-  let kn, effs = declare_private_constant ~role ~name ~opaque:false entry effs in
+  let kn, effs, senv = declare_private_constant ~role ~name ~opaque:false entry effs senv in
+  kn, (effs, senv)
+
+let register_definition_scheme ~internal ~name ~const:kn ~univs ?loc () =
+  let kind = Decls.(IsDefinition Scheme) in
   let () = register_constant (fallback_loc ~warn:false name None) kn kind Locality.ImportDefaultBehavior in
+  let () = DeclareUniv.declare_univ_binders (ConstRef kn) univs in
   Dumpglob.dump_definition
-    (CAst.make ?loc (Constant.label kn |> Label.to_id)) false "scheme";
+    (CAst.make ?loc (Constant.label kn)) false "scheme";
   let () = if internal then () else definition_message name in
-  kn, effs
+  ()
 
 (* Locality stuff *)
 let declare_entry ~loc ~name ?(scope=Locality.default_scope) ?(clearbody=false) ~kind ~typing_flags ~user_warns ?hook ?(obls=[]) ~impargs ~uctx entry =
@@ -1020,9 +1041,9 @@ let declare_possibly_mutual_parameters ~info ~cinfo ?(mono_uctx_extra=UState.emp
       (i+1, (name, Constr.mkConstU (cst,inst))::subst, (cst, univs)::csts)
   ) (0, [], []) cinfo typs)
 
-let make_recursive_bodies env ~typing_flags ~possible_guard ~rec_declaration =
+let make_recursive_bodies ?elim_to env ~typing_flags ~possible_guard ~rec_declaration =
   let env = Environ.update_typing_flags ?typing_flags env in
-  let indexes = Pretyping.search_guard env possible_guard rec_declaration in
+  let indexes = Pretyping.search_guard ?elim_to env possible_guard rec_declaration in
   let mkbody i = match indexes with
   | Some indexes -> Constr.mkFix ((indexes,i), rec_declaration)
   | None -> Constr.mkCoFix (i, rec_declaration) in
@@ -1047,7 +1068,8 @@ let declare_mutual_definitions ~info ~cinfo ~opaque ~uctx ~bodies ~possible_guar
   let possible_guard, fixrelevances = possible_guard in
   let fixtypes = List.map (fun CInfo.{typ} -> typ) cinfo in
   let rec_declaration = prepare_recursive_declaration cinfo fixtypes fixrelevances bodies in
-  let bodies_types, indexes = make_recursive_bodies env ~typing_flags ~rec_declaration ~possible_guard in
+  let elim_to = Inductive.eliminates_to @@ UState.elim_graph uctx in
+  let bodies_types, indexes = make_recursive_bodies ~elim_to env ~typing_flags ~rec_declaration ~possible_guard in
   let entries = List.map (fun (body, typ) -> ((body, Evd.empty_side_effects), Some typ)) bodies_types in
   let entries_for_using = List.map (fun (body, typ) -> (body, Some typ)) bodies_types in
   let using = interp_mutual_using env cinfo entries_for_using using in
@@ -1194,7 +1216,7 @@ module ProgramDecl = struct
         (* declare global univs of the main constant before we do obligations *)
         let uctx = UState.collapse_sort_variables uctx in
         let () = Global.push_context_set (UState.context_set uctx) in
-        let cst = Constant.make2 (Lib.current_mp()) (Label.of_id cinfo.CInfo.name) in
+        let cst = Constant.make2 (Lib.current_mp()) cinfo.CInfo.name in
         let () = DeclareUniv.declare_univ_binders (ConstRef cst)
             (UState.univ_entry ~poly:false uctx)
         in
@@ -1755,6 +1777,7 @@ end
 module Proof_ = Proof
 module Proof = struct
 
+type proof = Proof.t
 type nonrec closed_proof_output = closed_proof_output
 type proof_object = Proof_object.t
 
@@ -1777,12 +1800,7 @@ let map ~f p = { p with proof = f p.proof }
 let map_fold ~f p = let proof, res = f p.proof in { p with proof }, res
 
 let map_fold_endline ~f ps =
-  let et =
-    match ps.endline_tactic with
-    | None -> Proofview.tclUNIT ()
-    | Some tac -> Gentactic.interp tac
-  in
-  let (newpr,ret) = f et ps.proof in
+  let (newpr,ret) = f ps.endline_tactic ps.proof in
   let ps = { ps with proof = newpr } in
   ps, ret
 
@@ -2082,7 +2100,7 @@ let prepare_proof ?(warn_incomplete=true) { proof; pinfo } =
   let proofs = match pinfo.possible_guard with
     | None -> proofs
     | Some (possible_guard, fixrelevances) ->
-      let env = Safe_typing.push_private_constants (Global.env()) eff.Evd.seff_private in
+      let env = Safe_typing.push_private_constants (Global.env()) (Evd.seff_private eff) in
       let fixbodies, fixtypes = List.split proofs in
       let fixrelevances = List.map (EConstr.ERelevance.kind evd) fixrelevances in
       let rec_declaration = prepare_recursive_declaration pinfo.cinfo fixtypes fixrelevances fixbodies in
@@ -2108,7 +2126,7 @@ let control_only_guard { proof; pinfo } =
   let initial_goals = Proofview.initial_goals entry in
   let proofs = List.map (fun (_, body, typ) -> Evarutil.(nf_evar sigma body, nf_evar sigma typ)) initial_goals in
   let eff = Evd.eval_side_effects sigma in
-  let env = Safe_typing.push_private_constants (Global.env()) eff.Evd.seff_private in
+  let env = Safe_typing.push_private_constants (Global.env()) (Evd.seff_private eff) in
   let open Proof_info in
   match pinfo.possible_guard with
   | None ->
@@ -2167,15 +2185,18 @@ let update_sigma_univs ugraph p =
 
 let next = let n = ref 0 in fun () -> incr n; !n
 
-let by tac = map_fold ~f:(Proof.solve (Goal_select.select_nth 1) None tac)
+let by env tac pf =
+  let pf, safe = map_fold ~f:(Proof.solve env (Goal_select.select_nth 1) None tac) pf in
+  let () = register_side_effects pf.proof in
+  pf, safe
 
-let build_constant_by_tactic ~name ?warn_incomplete ~sigma ~sign ~poly (typ : EConstr.t) tac =
+let build_constant_by_tactic ~name ?warn_incomplete ~sigma ~env ~sign ~poly (typ : EConstr.t) tac =
   let loc = fallback_loc ~warn:false name None in
   let cinfo = [CInfo.make ?loc ~name ~typ:() ()] in
   let info = Info.make ~poly () in
   let pinfo = Proof_info.make ~cinfo ~info () in
   let pf = start_proof_core ~name ~pinfo sigma [Some sign, typ] in
-  let pf, status = by tac pf in
+  let pf, status = map_fold ~f:(Proof.solve env (Goal_select.select_nth 1) None tac) pf in
   let proof = close_proof ?warn_incomplete ~keep_body_ucst_separate:false ~opaque:Vernacexpr.Transparent pf in
   let entries = process_proof ~info proof.proof_object in
   let { Proof.sigma } = Proof.data pf.proof in
@@ -2190,7 +2211,7 @@ let build_by_tactic env ~uctx ~poly ~typ tac =
   let name = Id.of_string ("temporary_proof"^string_of_int (next())) in
   let sign = Environ.(val_of_named_context (named_context env)) in
   let sigma = Evd.from_ctx uctx in
-  let ce, status, sigma = build_constant_by_tactic ~name ~sigma ~sign ~poly typ tac in
+  let ce, status, sigma = build_constant_by_tactic ~name ~env ~sigma ~sign ~poly typ tac in
   let uctx = Evd.ustate sigma in
   (* ignore side effect universes:
      we don't reset the global env in this code path so the side effects are still present
@@ -2200,9 +2221,9 @@ let build_by_tactic env ~uctx ~poly ~typ tac =
   let body, _uctx = inline_private_constants ~uctx env ((body, Univ.ContextSet.empty), effs) in
   body, ce.proof_entry_type, ce.proof_entry_universes, status, uctx
 
-let declare_abstract ~name ~poly ~sign ~secsign ~opaque ~solve_tac sigma concl =
+let declare_abstract ~name ~poly ~sign ~secsign ~opaque ~solve_tac env sigma concl =
   let (const, safe, sigma') =
-    try build_constant_by_tactic ~warn_incomplete:false ~name ~poly ~sigma ~sign:secsign concl solve_tac
+    try build_constant_by_tactic ~warn_incomplete:false ~name ~poly ~env ~sigma ~sign:secsign concl solve_tac
     with Logic_monad.TacticFailure e as src ->
     (* if the tactic [tac] fails, it reports a [TacticFailure e],
        which is an error irrelevant to the proof system (in fact it
@@ -2219,11 +2240,13 @@ let declare_abstract ~name ~poly ~sign ~secsign ~opaque ~solve_tac sigma concl =
      `if poly && opaque && private_poly_univs ()` in `close_proof`
      kernel will boom. This deserves more investigation. *)
   let body, typ, args = ProofEntry.shrink_entry sign body const.proof_entry_type in
-  let cst, effs =
+  let senv = Global.safe_env () in
+  let cst, effs, senv =
     (* No side-effects in the entry, they already exist in the ambient environment *)
     let const = { const with proof_entry_body = body; proof_entry_type = typ } in
-    declare_private_constant ~name ~opaque const effs
+    declare_private_constant ~name ~opaque const effs senv
   in
+  let () = Global.Internal.reset_safe_env senv in
   let inst = instance_of_univs const.proof_entry_universes in
   let lem = EConstr.of_constr (Constr.mkConstU (cst, inst)) in
   effs, sigma, lem, args, safe
@@ -2415,6 +2438,7 @@ let save_lemma_proved_delayed ~pm ~proof ~idopt =
 end (* Proof module *)
 
 let _ = Ind_tables.declare_definition_scheme := declare_definition_scheme
+let _ = Ind_tables.register_definition_scheme := register_definition_scheme
 let _ = Abstract.declare_abstract := Proof.declare_abstract
 
 let build_by_tactic = Proof.build_by_tactic
@@ -2616,7 +2640,7 @@ let solve_obligation ?check_final prg num tac =
   let poly = Internal.get_poly prg in
   let info = Info.make ~kind ~poly () in
   let lemma = Proof.start_core ~cinfo ~info ~proof_ending ?using evd  in
-  let lemma = fst @@ Proof.by !default_tactic lemma in
+  let lemma = fst @@ Proof.by (Global.env ()) !default_tactic lemma in
   let lemma = Option.cata (fun tac -> Proof.set_endline_tactic tac lemma) lemma tac in
   lemma
 

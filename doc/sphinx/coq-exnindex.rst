@@ -1,7 +1,5 @@
 :orphan:
 
-.. hack to get index in TOC
+.. raw:: html
 
--------------------------
-Errors and warnings index
--------------------------
+   <meta http-equiv="refresh" content="0;URL=rocq-exnindex.html">

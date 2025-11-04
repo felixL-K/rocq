@@ -162,7 +162,7 @@ let model_conclusion env sigma ind_rel params n arity_indices =
     List.fold_right
       (fun (_,t) (sigma, subst) ->
         let t = EConstr.Vars.substl subst (EConstr.Vars.liftn n (List.length subst + 1) t) in
-        let typeclass_candidate = Typeclasses.is_maybe_class_type sigma t in
+        let typeclass_candidate = Typeclasses.is_maybe_class_type env sigma t in
         let sigma, c = Evarutil.new_evar ~typeclass_candidate env sigma t in
         sigma, c::subst)
       arity_indices (sigma, []) in
@@ -591,7 +591,7 @@ let check_param = function
 | CLocalAssum (nas, _, Default _, _) -> List.iter check_named nas
 | CLocalAssum (nas, _, Generalized _, _) -> ()
 | CLocalPattern {CAst.loc} ->
-  Loc.raise ?loc (Gramlib.Grammar.Error "pattern with quote not allowed here")
+  Loc.raise ?loc (Gramlib.Grammar.ParseError "pattern with quote not allowed here")
 
 let restrict_inductive_universes sigma ctx_params arities constructors =
   let merge_universes_of_constr c acc =
@@ -904,7 +904,7 @@ let rec count_binder_expr = function
   | CLocalAssum(l,_,_,_) :: rest -> List.length l + count_binder_expr rest
   | CLocalDef _ :: rest -> 1 + count_binder_expr rest
   | CLocalPattern {CAst.loc} :: _ ->
-    Loc.raise ?loc (Gramlib.Grammar.Error "pattern with quote not allowed here")
+    Loc.raise ?loc (Gramlib.Grammar.ParseError "pattern with quote not allowed here")
 
 let interp_mutual_inductive ~env ~flags ?typing_flags udecl indl ~private_ind ~uniform =
   let indlocs = List.map (fun ((n,_,_,constructors),_) ->

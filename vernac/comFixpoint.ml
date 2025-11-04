@@ -24,6 +24,21 @@ module NamedDecl = Context.Named.Declaration
 
 (* 3c| Fixpoints and co-fixpoints *)
 
+let check_duplicate fixlnames =
+  let rec first_dup eq prefix = function
+    | [] -> None
+    | x :: l ->
+        if List.mem_f eq x prefix then
+          Some x
+        else
+          first_dup eq (x :: prefix) l
+  in
+  match first_dup lident_eq [] fixlnames with
+  | None -> ()
+  | Some CAst.{ v=na; loc } ->
+    CErrors.user_err ?loc (str "An entry of name " ++ Id.print na ++
+      str " already exists in the mutual block.")
+
 (* An (unoptimized) function that maps preorders to partial orders...
 
    Input:  a list of associations (x,[y1;...;yn]), all yi distincts
@@ -164,7 +179,7 @@ let encapsulate_Fix_sub env sigma recname ctx body ccl (extradecl, rel, relargty
   (* Making Fix_sub ready to take the extended body as argument *)
   let sigma, fix_sub =
     let sigma, fix_sub_term = Evd.fresh_global (Global.env ()) sigma fix_sub_ref in
-    let typeclass_candidate = Typeclasses.is_maybe_class_type sigma wf_type in
+    let typeclass_candidate = Typeclasses.is_maybe_class_type env sigma wf_type in
     let sigma, wf_proof = Evarutil.new_evar ~typeclass_candidate env sigma
         ~src:(Loc.tag @@ Evar_kinds.QuestionMark {
             Evar_kinds.default_question_mark with Evar_kinds.qm_obligation=Evar_kinds.Define false;
@@ -419,6 +434,7 @@ let interp_mutual_definition env ~program_mode ~function_mode rec_order fixl =
   let open EConstr in
   let fixlnames = List.map (fun fix -> fix.Vernacexpr.fname) fixl in
   let fixnames = List.map (fun na -> na.CAst.v) fixlnames in
+  check_duplicate fixlnames;
 
   (* Interp arities allowing for unresolved types *)
   let sigma, decl = interp_mutual_univ_decl_opt env (List.map (fun Vernacexpr.{univs} -> univs) fixl) in
@@ -585,8 +601,8 @@ let do_mutually_recursive ?pm ~refine ~program_mode ?(use_inference_hook=false) 
       let possible_guard = (possible_guard, fixrs) in
       Some (Declare.Obls.add_mutual_definitions ~pm ~cinfo ~info ~opaque:false ~uctx ~bodies ~possible_guard ?using obls), None)
   | None ->
-    try
-      let bodies = List.map Option.get bodies in
+    match Option.List.map (fun x -> x) bodies with
+    | Some bodies ->
       let uctx = Evd.ustate sigma in
       (* All bodies are defined *)
       let possible_guard = (possible_guard, fixrs) in
@@ -594,7 +610,7 @@ let do_mutually_recursive ?pm ~refine ~program_mode ?(use_inference_hook=false) 
         Declare.declare_mutual_definitions ~cinfo ~info ~opaque:false ~uctx ~possible_guard ~bodies ?using ()
       in
       None, None
-    with Option.IsNone ->
+    | None ->
       (* At least one undefined body *)
       Evd.check_univ_decl_early ~poly ~with_obls:false sigma udecl (Option.List.flatten bodies @ fixtypes);
       let possible_guard = (possible_guard, fixrs) in

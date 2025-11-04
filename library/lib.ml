@@ -16,7 +16,7 @@ type export_flag = Export | Import
 type export = (export_flag * Libobject.open_filter) option (* None for a Module Type *)
 
 let make_oname Libobject.{ obj_path; obj_mp } id =
-  Names.(Libnames.add_path_suffix obj_path id, KerName.make obj_mp (Label.of_id id))
+  Names.(Libnames.add_path_suffix obj_path id, KerName.make obj_mp id)
 
 type 'summary node =
   | CompilingLibrary of Libobject.object_prefix
@@ -157,7 +157,8 @@ let start_compilation s mp =
   }
   in
   synterp_state := st;
-  interp_state := initial_stk
+  interp_state := initial_stk;
+  Nametab.OpenMods.push (Until 1) path (DirOpenModule mp)
 
 let end_compilation_checks dir =
   let () = match find_entries_p is_opening_node !interp_state with
@@ -208,7 +209,7 @@ let make_path_except_section id =
 
 let make_kn id =
   let mp = current_mp () in
-  Names.KerName.make mp (Names.Label.of_id id)
+  Names.KerName.make mp id
 
 let make_foname id = make_oname !synterp_state.path_prefix id
 
@@ -299,7 +300,7 @@ let rec split_modpath = function
   |Names.MPbound mbid -> library_dp (), [Names.MBId.to_id mbid]
   |Names.MPdot (mp,l) ->
     let (dp,ids) = split_modpath mp in
-    (dp, Names.Label.to_id l :: ids)
+    (dp, l :: ids)
 
 let library_part = function
   | GlobRef.VarRef id -> library_dp ()
@@ -514,7 +515,20 @@ let add_discharged_leaf obj =
 
 let add_leaf obj =
   Libobject.cache_object (prefix(),obj);
-  match Libobject.object_stage obj with
+  let ostage = Libobject.object_stage obj in
+  let ok_stage = match !Flags.in_synterp_phase with
+    | None -> true
+    | Some false -> ostage == Interp
+    | Some true -> ostage == Synterp
+  in
+  let () = if not ok_stage then
+      let ppstage = match ostage with Interp -> "interp" | Synterp -> "synterp" in
+      CErrors.anomaly
+        Pp.(str "Adding object " ++
+            str (Libobject.object_name obj) ++
+            str " in incorrect stage (object_stage = " ++ str ppstage ++ str ").")
+  in
+  match ostage with
   | Summary.Stage.Synterp ->
     SynterpActions.add_leaf_entry (AtomicObject obj)
   | Summary.Stage.Interp ->

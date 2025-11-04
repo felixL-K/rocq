@@ -141,7 +141,7 @@ type function_info =
 (* let function_table = ref ([] : function_db) *)
 
 let from_function = Summary.ref Cmap_env.empty ~name:"functions_db_fn"
-let from_graph = Summary.ref Indmap.empty ~name:"functions_db_gr"
+let from_graph = Summary.ref Indmap_env.empty ~name:"functions_db_gr"
 
 (*
 let rec do_cache_info finfo = function
@@ -166,7 +166,7 @@ let cache_Function (_,(finfos)) =
 
 let cache_Function finfos =
   from_function := Cmap_env.add finfos.function_constant finfos !from_function;
-  from_graph := Indmap.add finfos.graph_ind finfos !from_graph
+  from_graph := Indmap_env.add finfos.graph_ind finfos !from_graph
 
 let subst_Function (subst, finfos) =
   let do_subst_con c = Mod_subst.subst_constant subst c
@@ -211,12 +211,12 @@ let discharge_Function finfos = Some finfos
 
 let pr_ocst env sigma c =
   Option.fold_right
-    (fun v acc -> Printer.pr_global_env (Termops.vars_of_env env) (ConstRef v))
+    (fun v acc -> Termops.pr_global_env env (ConstRef v))
     c (mt ())
 
 let pr_info env sigma f_info =
   str "function_constant := "
-  ++ Printer.pr_global_env (Termops.vars_of_env env) (ConstRef f_info.function_constant)
+  ++ Termops.pr_global_env env (ConstRef f_info.function_constant)
   ++ fnl ()
   ++ str "function_constant_type := "
   ++ ( try
@@ -262,14 +262,14 @@ let find_or_none id =
   with Not_found -> None
 
 let find_Function_infos f = Cmap_env.find_opt f !from_function
-let find_Function_of_graph ind = Indmap.find_opt ind !from_graph
+let find_Function_of_graph ind = Indmap_env.find_opt ind !from_graph
 
 let update_Function finfo =
   (* Pp.msgnl (pr_info finfo); *)
   Lib.add_leaf (in_Function finfo)
 
 let add_Function is_general f =
-  let f_id = Label.to_id (Constant.label f) in
+  let f_id = Constant.label f in
   let equation_lemma = find_or_none (mk_equation_id f_id)
   and correctness_lemma = find_or_none (mk_correct_id f_id)
   and completeness_lemma = find_or_none (mk_complete_id f_id)
@@ -307,13 +307,10 @@ let { Goptions.get = do_rewrite_dependent } =
     ~value:true
     ()
 
-let { Goptions.get = do_observe } =
-  Goptions.declare_bool_option_and_ref
-    ~key:["Function_debug"]
-    ~value:false
-    ()
+let observe_flag, observe = CDebug.create_full ~name:"funind" ()
 
-let observe strm = if do_observe () then Feedback.msg_debug strm else ()
+let do_observe () = CDebug.get_flag observe_flag
+
 let debug_queue = Stack.create ()
 
 let print_debug_queue b e =

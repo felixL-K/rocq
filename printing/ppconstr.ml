@@ -66,6 +66,7 @@ let lnegint = 35 (* must be consistent with Notation "- x" *)
 let ltop = LevelLe 200
 let lproj = 1
 let ldelim = 1
+let lcase_type = LevelLe 100
 let lsimpleconstr = LevelLe 8
 let lsimplepatt = LevelLe 1
 let no_after = None
@@ -220,7 +221,7 @@ let pr_quality_expr q = match q with
 
 let pr_quality_univ (q, l) = match q with
   | None -> pr_univ l
-  | Some q ->  pr_qvar_expr q ++ spc() ++ str "|" ++ spc () ++ pr_univ l
+  | Some q ->  pr_qvar_expr q ++ spc() ++ str ";" ++ spc () ++ pr_univ l
 
 let pr_univ_annot pr x = str "@{" ++ pr x ++ str "}"
 
@@ -248,7 +249,7 @@ let pr_patvar = pr_id
 
 let pr_inside_universe_instance (ql,ul) =
   (if List.is_empty ql then mt()
-   else prlist_with_sep spc pr_quality_expr ql ++ strbrk " | ")
+   else prlist_with_sep spc pr_quality_expr ql ++ strbrk " ; ")
   ++ prlist_with_sep spc pr_univ_level_expr ul
 
 let pr_universe_instance l =
@@ -548,7 +549,7 @@ let pr_as_in pr na indnalopt =
    | None -> mt ()) ++
   (match indnalopt with
    | None -> mt ()
-   | Some t -> spc () ++ keyword "in" ++ spc () ++ pr_patt pr no_after lsimplepatt t)
+   | Some t -> spc () ++ keyword "in" ++ spc () ++ pr_patt pr no_after ltop t)
 
 let pr_case_item pr (tm,as_clause, in_clause) =
   hov 0 (pr no_after (LevelLe lcast) tm ++ pr_as_in (pr no_after ltop) as_clause in_clause)
@@ -558,7 +559,7 @@ let pr_case_type pr po =
   | None -> mt ()
   | Some { CAst.v = CHole h } when is_anonymous_hole h -> mt()
   | Some p ->
-    spc() ++ hov 2 (keyword "return" ++ pr_sep_com spc (pr no_after lsimpleconstr) p)
+    spc() ++ hov 2 (keyword "return" ++ pr_sep_com spc (pr no_after lcase_type) p)
 
 let pr_simple_return_type pr na po =
   (match na with

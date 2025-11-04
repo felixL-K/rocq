@@ -28,21 +28,21 @@ module NamedDecl = Context.Named.Declaration
     without body. We fix this by looking in the implementation
     of the module *)
 
-let modcache = ref (MPmap.empty : structure_body MPmap.t)
+let modcache = ref (ModPath.Map.empty : structure_body ModPath.Map.t)
 
 let rec search_mod_label lab = function
   | [] -> raise Not_found
-  | (l, SFBmodule mb) :: _ when Label.equal l lab -> mb
+  | (l, SFBmodule mb) :: _ when Id.equal l lab -> mb
   | _ :: fields -> search_mod_label lab fields
 
 let rec search_cst_label lab = function
   | [] -> raise Not_found
-  | (l, SFBconst cb) :: _ when Label.equal l lab -> cb
+  | (l, SFBconst cb) :: _ when Id.equal l lab -> cb
   | _ :: fields -> search_cst_label lab fields
 
 let rec search_mind_label lab = function
   | [] -> raise Not_found
-  | (l, SFBmind mind) :: _ when Label.equal l lab -> mind
+  | (l, SFBmind mind) :: _ when Id.equal l lab -> mind
   | _ :: fields -> search_mind_label lab fields
 
 (* TODO: using [empty_delta_resolver] below is probably slightly incorrect. But:
@@ -75,10 +75,10 @@ let rec lookup_module_in_impl mp =
          search_mod_label lab' fields
 
 and memoize_fields_of_mp mp =
-  try MPmap.find mp !modcache
+  try ModPath.Map.find mp !modcache
   with Not_found ->
     let l = fields_of_mp mp in
-    modcache := MPmap.add mp l !modcache;
+    modcache := ModPath.Map.add mp l !modcache;
     l
 
 and fields_of_mp mp =
@@ -101,7 +101,7 @@ and fields_of_mp mp =
 
 and fields_of_mb subs mp mb args = match Mod_declarations.mod_expr mb with
   | Algebraic expr -> fields_of_expression subs mp args (mod_type mb) expr
-  | Struct sign ->
+  | Struct (_, sign) ->
     let sign = Modops.annotate_struct_body sign (mod_type mb) in
     fields_of_signature subs mp args sign
   | Abstract|FullStruct -> fields_of_signature subs mp args (mod_type mb)
@@ -173,12 +173,6 @@ let lookup_mind mind =
 (** Graph traversal of an object, collecting on the way the dependencies of
     traversed objects *)
 
-let label_of = let open GlobRef in function
-  | ConstRef kn -> Constant.label kn
-  | IndRef (kn,_)
-  | ConstructRef ((kn,_),_) -> MutInd.label kn
-  | VarRef id -> Label.of_id id
-
 let fold_with_full_binders g f n acc c =
   let open Context.Rel.Declaration in
   let open Constr in
@@ -215,7 +209,7 @@ let get_constant_body access kn =
     | c, _ -> Some c
     | exception e when CErrors.noncritical e -> None (* missing delayed body, e.g. in vok mode *)
 
-let rec traverse access current ctx accu t =
+let rec traverse access (current:GlobRef.t) ctx accu t =
   let open GlobRef in
   let open Constr in
   match Constr.kind t with
@@ -259,7 +253,7 @@ and traverse_object access (curr, data, ax2ty) body obj =
       GlobRef.Map_env.add obj None data, ax2ty
     | Some body ->
       let contents,data,ax2ty =
-        traverse access (label_of obj) Context.Rel.empty
+        traverse access obj Context.Rel.empty
                  (GlobRef.Set_env.empty,data,ax2ty) body in
       GlobRef.Map_env.add obj (Some contents) data, ax2ty
   in
@@ -271,7 +265,6 @@ and traverse_object access (curr, data, ax2ty) body obj =
     dependency between mutually defined inductives and constructors. *)
 and traverse_inductive access (curr, data, ax2ty) mind obj =
   let firstind_ref = (GlobRef.IndRef (mind, 0)) in
-  let label = label_of obj in
   let data, ax2ty =
    (* Invariant : I_0 \in data iff I_i \in data iff c_ij \in data
       where I_0, I_1, ... are in the same mutual definition and c_ij
@@ -288,7 +281,7 @@ and traverse_inductive access (curr, data, ax2ty) mind obj =
      (* Collects references of parameters *)
      let param_ctx = mib.mind_params_ctxt in
      let nparam = List.length param_ctx in
-     let accu = traverse_context access label Context.Rel.empty accu param_ctx in
+     let accu = traverse_context access obj Context.Rel.empty accu param_ctx in
      (* For each inductive, collects references in their arity and in the type
         of constructors*)
      let (contents, data, ax2ty) = Array.fold_left (fun accu oib ->
@@ -297,11 +290,11 @@ and traverse_inductive access (curr, data, ax2ty) mind obj =
          in
          let accu =
            traverse_context
-             access label param_ctx accu arity_wo_param
+             access obj param_ctx accu arity_wo_param
          in
          Array.fold_left (fun accu cst_typ ->
             let param_ctx, cst_typ_wo_param = Term.decompose_prod_n_decls nparam cst_typ in
-            traverse access label param_ctx accu cst_typ_wo_param)
+            traverse access obj param_ctx accu cst_typ_wo_param)
           accu oib.mind_user_lc)
        accu mib.mind_packets
      in
@@ -333,7 +326,7 @@ and traverse_context access current ctx accu ctxt =
            ctx, accu) ctxt ~init:(ctx, accu))
 
 let traverse access current t =
-  let () = modcache := MPmap.empty in
+  let () = modcache := ModPath.Map.empty in
   traverse access current Context.Rel.empty (GlobRef.Set_env.empty, GlobRef.Map_env.empty, GlobRef.Map_env.empty) t
 
 (** Hopefully bullet-proof function to recover the type of a constant. It just
@@ -352,7 +345,7 @@ let uses_uip mib =
 let assumptions ?(add_opaque=false) ?(add_transparent=false) access st gr t =
   let open Printer in
   (* Only keep the transitive dependencies *)
-  let (_, graph, ax2ty) = traverse access (label_of gr) t in
+  let (_, graph, ax2ty) = traverse access gr t in
   let open GlobRef in
   let fold obj contents accu = match obj with
   | VarRef id ->

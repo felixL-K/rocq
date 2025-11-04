@@ -135,12 +135,13 @@ and conv_atom env pb lvl a1 a2 cu =
         if not (Int.equal s1 s2) || not (Array.equal Int.equal rp1 rp2) then raise NotConvertible;
         if f1 == f2 then cu
         else conv_fix env lvl t1 f1 t2 f2 cu
-    | Acofix (t1, f1, s1, _), Acofix (t2, f2, s2, _) ->
+    | Acofix (t1, f1, s1, args1, _), Acofix (t2, f2, s2, args2, _) ->
         if not (Int.equal s1 s2) then raise NotConvertible;
-        if f1 == f2 then cu
+        if f1 == f2 && args1 == args2 then cu
+        else if not (Int.equal (Array.length f1) (Array.length f2) && Int.equal (Array.length args1) (Array.length args2)) then
+          raise NotConvertible
         else
-          if not (Int.equal (Array.length f1) (Array.length f2)) then raise NotConvertible
-          else conv_fix env lvl t1 f1 t2 f2 cu
+          Array.fold_left2 (fun cu v1 v2 -> conv_val env CONV lvl v1 v2 cu) (conv_fix env lvl t1 f1 t2 f2 cu) args1 args2
     | Aproj((ind1, i1), ac1), Aproj((ind2, i2), ac2) ->
        if not (Ind.CanOrd.equal ind1 ind2 && Int.equal i1 i2) then raise NotConvertible
        else conv_accu env CONV lvl ac1 ac2 cu
@@ -180,6 +181,7 @@ let native_conv_gen (type err) pb sigma env (state, check) t1 t2 =
   debug_native_compiler (fun () -> Pp.str "Running test...");
   let t0 = Sys.time () in
   let (rt1, rt2) = Nativelib.execute_library ~prefix fn upds in
+  let rt1 = Option.get rt1 and rt2 = Option.get rt2 in
   let t1 = Sys.time () in
   let time_info = Format.sprintf "Evaluation done in %.5f@." (t1 -. t0) in
   debug_native_compiler (fun () -> Pp.str time_info);
@@ -200,13 +202,14 @@ let native_conv_gen pb sigma env univs t1 t2 =
 (* Wrapper for [native_conv] above *)
 let native_conv cv_pb sigma env t1 t2 =
   let univs = Environ.universes env in
+  let elims = Environ.qualities env in
   let b =
-    if cv_pb = CUMUL then Constr.leq_constr_univs univs t1 t2
-    else Constr.eq_constr_univs univs t1 t2
+    if cv_pb = CUMUL then Constr.leq_constr_univs elims univs t1 t2
+    else Constr.eq_constr_univs elims univs t1 t2
   in
   if b then Result.Ok ()
   else
-    let state = (univs, checked_universes) in
+    let state = (univs, checked_universes env) in
     let t1 = Term.it_mkLambda_or_LetIn t1 (Environ.rel_context env) in
     let t2 = Term.it_mkLambda_or_LetIn t2 (Environ.rel_context env) in
     match native_conv_gen cv_pb sigma env state t1 t2 with

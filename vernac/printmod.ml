@@ -59,16 +59,11 @@ let mk_fake_top =
 let def s = tag_definition (str s)
 let keyword s = tag_keyword (str s)
 
-let get_new_id locals id =
-  let rec get_id l id =
-    let dir = Libnames.make_path DirPath.empty id in
-      if not (Nametab.exists_module dir || Nametab.exists_dir dir) then
-        id
-      else
-        get_id (Id.Set.add id l) (Namegen.next_ident_away id l)
-  in
-  let avoid = List.fold_left (fun accu (_, id) -> Id.Set.add id accu) Id.Set.empty locals in
-    get_id avoid id
+let get_new_id avoid id =
+  Namegen.next_ident_away_from id (fun id ->
+      Id.Set.mem id avoid ||
+      let dir = Libnames.make_path DirPath.empty id in
+      Nametab.exists_module dir || Nametab.exists_dir dir)
 
 (** Inductive declarations *)
 
@@ -110,16 +105,16 @@ let print_fields envpar sigma cstrtypes =
         Id.print id ++ str (if b then " : " else " := ") ++
         Printer.pr_lconstr_env envpar sigma c) fields) ++ str" }"
 
-let is_canonical_as ind indname id =
+let is_canonical_as env ind indname id =
   (* See record.ml *)
-  let canonical_id = Record.canonical_inhabitant_id ~isclass:(Typeclasses.is_class (IndRef ind)) indname in
+  let canonical_id = Record.canonical_inhabitant_id ~isclass:(Typeclasses.is_class env (IndRef ind)) indname in
   Id.equal id canonical_id
 
-let print_as ind indname = function
+let print_as env ind indname = function
   | Anonymous -> mt () (* TODO: get the "as" name also for non-primitive records *)
-  | Name id -> if is_canonical_as ind indname id then mt () else str " as " ++ Id.print id
+  | Name id -> if is_canonical_as env ind indname id then mt () else str " as " ++ Id.print id
 
-let print_one_inductive env sigma isrecord mib ((_,i) as ind, as_clause) =
+let print_one_inductive env sigma mib ((_,i) as ind) =
   let u = UVars.make_abstract_instance (Declareops.inductive_polymorphic_context mib) in
   let mip = mib.mind_packets.(i) in
   let paramdecls = Inductive.inductive_paramdecls (mib,u) in
@@ -130,7 +125,12 @@ let print_one_inductive env sigma isrecord mib ((_,i) as ind, as_clause) =
   let arity = hnf_prod_applist_decls env nparamdecls (build_ind_type ((mib,mip),u)) args in
   let cstrtypes = Inductive.type_of_constructors (ind,u) (mib,mip) in
   let cstrtypes = Array.map (fun c -> snd (Term.decompose_prod_n_decls nparamdecls c)) cstrtypes in
-  if isrecord then assert (Array.length cstrtypes = 1);
+  let isrecord = match mip.mind_record with
+    | NotRecord -> None
+    | FakeRecord -> if !Flags.raw_print then None else Some Anonymous
+    | PrimRecord (id,_,_,_) -> Some (Name id)
+  in
+  if Option.has_some isrecord then assert (Array.length cstrtypes = 1);
   let inst =
     if Declareops.inductive_is_polymorphic mib then
       Printer.pr_universe_instance_binder sigma u Univ.Constraints.empty
@@ -139,36 +139,35 @@ let print_one_inductive env sigma isrecord mib ((_,i) as ind, as_clause) =
   hov 0 (
     Id.print mip.mind_typename ++ inst ++ brk(1,4) ++ print_params env sigma params ++
     str ": " ++ Printer.pr_lconstr_env env_params sigma arity ++ str " :=" ++
-    if isrecord then str " " ++ Id.print mip.mind_consnames.(0) else mt()) ++
-    if not isrecord then
-      brk(0,2) ++ print_constructors env_params sigma mip.mind_consnames cstrtypes
-    else
-      brk(1,2) ++ print_fields env_params sigma cstrtypes ++ print_as ind mip.mind_typename as_clause
+    if Option.has_some isrecord then str " " ++ Id.print mip.mind_consnames.(0) else mt()) ++
+  match isrecord with
+  | None ->
+    brk(0,2) ++ print_constructors env_params sigma mip.mind_consnames cstrtypes
+  | Some as_clause ->
+    brk(1,2) ++ print_fields env_params sigma cstrtypes ++ print_as env ind mip.mind_typename as_clause
 
 let pr_mutual_inductive_body env mind mib udecl =
   let inds = List.init (Array.length mib.mind_packets) (fun x -> (mind, x)) in
-  let default_as = List.make (Array.length mib.mind_packets) Anonymous in
-  let keyword, isrecord, as_clause =
+  let keyword =
     let open Declarations in
     match mib.mind_finite with
-    | Finite -> "Inductive", false, default_as
-    | CoFinite -> "CoInductive", false, default_as
+    | Finite -> "Inductive"
+    | CoFinite -> "CoInductive"
     | BiFinite ->
-       match mib.mind_record with
-       | FakeRecord when not !Flags.raw_print -> "Record", true, default_as
-       | PrimRecord l -> "Record", true, Array.map_to_list (fun (id,_,_,_) -> Name id) l
-       | FakeRecord | NotRecord -> "Variant", false, default_as
+       match mib.mind_packets.(0).mind_record with
+       | NotRecord -> "Variant"
+       | FakeRecord -> if !Flags.raw_print then "Variant" else "Record"
+       | PrimRecord l -> "Record"
   in
   let udecl = Option.map (fun x -> GlobRef.IndRef (mind,0), x) udecl in
   let bl = Printer.universe_binders_with_opt_names
       (Declareops.inductive_polymorphic_context mib) udecl
   in
   let sigma = Evd.from_ctx (UState.of_names bl) in
-  let inds_as = List.combine inds as_clause in
 
   hov 0 (def keyword ++ spc () ++
          prlist_with_sep (fun () -> fnl () ++ str"  with ")
-           (print_one_inductive env sigma isrecord mib) inds_as ++ str "." ++
+           (print_one_inductive env sigma mib) inds ++ str "." ++
          Printer.pr_universes sigma ?variance:mib.mind_variance mib.mind_universes)
 
 (** Modpaths *)
@@ -176,7 +175,7 @@ let pr_mutual_inductive_body env mind mib udecl =
 let rec print_local_modpath locals = function
   | MPbound mbid -> Id.print (Util.List.assoc_f MBId.equal mbid locals)
   | MPdot(mp,l) ->
-      print_local_modpath locals mp ++ str "." ++ Label.print l
+      print_local_modpath locals mp ++ str "." ++ Id.print l
   | MPfile _ -> raise Not_found
 
 let print_modpath locals mp =
@@ -218,7 +217,7 @@ let nametab_register_body mp dir (l,body) =
     | SFBmodtype _ -> () (* TODO *)
     | SFBrules _ -> () (* TODO? *)
     | SFBconst _ ->
-      push (Label.to_id l) (GlobRef.ConstRef (Constant.make2 mp l))
+      push l (GlobRef.ConstRef (Constant.make2 mp l))
     | SFBmind mib ->
       let mind = MutInd.make2 mp l in
       Array.iteri
@@ -257,15 +256,14 @@ let nametab_register_modparam used mbid mtb =
     with e when CErrors.noncritical e ->
       (* Otherwise, we try to play with the nametab ourselves *)
       let mp = MPbound mbid in
-      let check id = Id.Set.mem id used || Nametab.exists_module (Libnames.make_path DirPath.empty id) in
-      let id = Namegen.next_ident_away_from id check in
+      let id = get_new_id used id in
       let dir = DirPath.make [id] in
       nametab_register_dir mp;
       List.iter (nametab_register_body mp dir) struc;
       id
 
 let print_body is_impl extent env mp (l,body) =
-  let name = Label.print l in
+  let name = Id.print l in
   hov 2 (match body with
     | SFBmodule _ -> keyword "Module" ++ spc () ++ name
     | SFBmodtype _ -> keyword "Module Type" ++ spc () ++ name
@@ -308,7 +306,8 @@ let print_struct is_impl extent env mp struc =
   prlist_with_sep spc (print_body is_impl extent env mp) struc
 
 let print_structure is_type extent env mp locals struc =
-  let env' = Modops.add_structure mp struc (Mod_subst.empty_delta_resolver mp) env in
+  (* XXX: when printing signatures we overwrite already defined modules *)
+  let env' = Environ.Internal.overwrite_structure mp struc (Mod_subst.empty_delta_resolver mp) env in
   nametab_register_module_body mp struc;
   let kwd = if is_type then "Sig" else "Struct" in
   hv 2 (keyword kwd ++ spc () ++ print_struct false extent env' mp struc ++
@@ -363,7 +362,8 @@ let rec print_functor fty fatom is_type extent env mp used locals = function
       let mp1 = MPbound mbid in
       let pr_mtb1 = fty extent env mp1 used locals mtb1 in
       let env' = Modops.add_module_parameter mbid mtb1 env in
-      let locals' = (mbid, get_new_id locals (MBId.to_id mbid))::locals in
+      let avoid = List.fold_left (fun accu (_, id) -> Id.Set.add id accu) Id.Set.empty locals in
+      let locals' = (mbid, get_new_id avoid (MBId.to_id mbid))::locals in
       let kwd = if is_type then "Funsig" else "Functor" in
       hov 2
         (keyword kwd ++ spc () ++
@@ -404,7 +404,7 @@ let unsafe_print_module extent env mp with_body mb =
     | _, Algebraic me ->
       let me = Modops.annotate_module_expression me (mod_type mb) in
       pr_equals ++ print_expression' false extent env mp me
-    | _, Struct sign ->
+    | _, Struct (_, sign) ->
       let sign = Modops.annotate_struct_body sign (mod_type mb) in
       pr_equals ++ print_signature' false extent env mp sign
     | _, FullStruct -> pr_equals ++ print_signature' false extent env mp (mod_type mb)

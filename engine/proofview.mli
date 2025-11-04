@@ -97,7 +97,7 @@ type focus_context
    new nearly identical function every time. Hence the generic name. *)
 (* In this version: the goals in the context, as a "zipper" (the first
    list is in reversed order). *)
-val focus_context : focus_context -> Evar.t list * Evar.t list
+val focus_context : Evd.evar_map -> focus_context -> Evar.t list * Evar.t list
 
 (** [focus i j] focuses a proofview on the goals from index [i] to
     index [j] (inclusive, goals are indexed from [1]). I.e. goals
@@ -375,7 +375,7 @@ val depends_on : Evd.evar_map -> Evar.t -> Evar.t -> bool
     and the returned list contains only unsolved goals. *)
 val with_shelf : 'a tactic -> (Evar.t list * 'a) tactic
 
-(** If [n] is positive, [cycle n] puts the [n] first goal last. If [n]
+(** If [n] is positive, [cycle n] puts the [n] first goals last. If [n]
     is negative, then it puts the [n] last goals first.*)
 val cycle : int -> unit tactic
 

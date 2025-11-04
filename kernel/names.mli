@@ -17,7 +17,6 @@
     - Name.t is an ad-hoc variant of Id.t option allowing to handle optionally
       named objects.
     - DirPath.t represents generic paths as sequences of identifiers.
-    - Label.t is an equivalent of Id.t made distinct for semantical purposes.
     - ModPath.t are module paths.
     - KerName.t are absolute names of objects in Rocq.
 *)
@@ -158,48 +157,13 @@ sig
   (** Print non-empty directory paths as ["root.module.submodule"] *)
 
   val print : t -> Pp.t
-end
-
-module DPset : Set.ExtS with type elt = DirPath.t
-module DPmap : Map.ExtS with type key = DirPath.t and module Set := DPset
-
-(** {6 Names of structure elements } *)
-
-module Label :
-sig
-  type t
-  (** Type of labels *)
-
-  val equal : t -> t -> bool
-  (** Equality over labels *)
-
-  val compare : t -> t -> int
-  (** Comparison over labels. *)
-
-  val hash : t -> int
-  (** Hash over labels. *)
-
-  val make : string -> t
-  (** Create a label out of a string. *)
-
-  val of_id : Id.t -> t
-  (** Conversion from an identifier. *)
-
-  val to_id : t -> Id.t
-  (** Conversion to an identifier. *)
-
-  val to_string : t -> string
-  (** Conversion to string. *)
-
-  val print : t -> Pp.t
-  (** Pretty-printer. *)
 
   module Set : Set.ExtS with type elt = t
   module Map : Map.ExtS with type key = t and module Set := Set
-
-  val hcons : t Hashcons.f
-
 end
+
+module DPset = DirPath.Set [@@deprecated "Use DirPath.Set"]
+module DPmap = DirPath.Map [@@deprecated "Use DirPath.Map"]
 
 (** {6 Unique names for bound modules} *)
 
@@ -234,10 +198,13 @@ sig
   val debug_to_string : t -> string
   (** Same as [to_string], but outputs extra information related to debug. *)
 
+  module Set : Set.ExtS with type elt = t
+  module Map : Map.ExtS with type key = t and module Set := Set
+
 end
 
-module MBIset : Set.ExtS with type elt = MBId.t
-module MBImap : Map.ExtS with type key = MBId.t and module Set := MBIset
+module MBIset = MBId.Set [@@deprecated "Use MBId.Set"]
+module MBImap = MBId.Map [@@deprecated "Use MBId.Map"]
 
 (** {6 The module part of the kernel name } *)
 
@@ -246,7 +213,7 @@ sig
   type t =
     | MPfile of DirPath.t
     | MPbound of MBId.t
-    | MPdot of t * Label.t
+    | MPdot of t * Id.t
 
   val compare : t -> t -> int
   val equal : t -> t -> bool
@@ -271,10 +238,13 @@ sig
   val debug_to_string : t -> string
   (** Same as [to_string], but outputs extra information related to debug. *)
 
+  module Set : Set.ExtS with type elt = t
+  module Map : Map.ExtS with type key = t and module Set := Set
+
 end
 
-module MPset : Set.ExtS with type elt = ModPath.t
-module MPmap : Map.ExtS with type key = ModPath.t and module Set := MPset
+module MPset = ModPath.Set [@@deprecated "Use ModPath.Set"]
+module MPmap = ModPath.Map [@@deprecated "Use ModPath.Map"]
 
 (** {6 The absolute names of objects seen by kernel } *)
 
@@ -283,12 +253,12 @@ sig
   type t
 
   (** Constructor and destructor *)
-  val make : ModPath.t -> Label.t -> t
-  val repr : t -> ModPath.t * Label.t
+  val make : ModPath.t -> Id.t -> t
+  val repr : t -> ModPath.t * Id.t
 
   (** Projections *)
   val modpath : t -> ModPath.t
-  val label : t -> Label.t
+  val label : t -> Id.t
 
   val to_string : t -> string
   (** Encode as a string (not to be used for user-facing messages). *)
@@ -306,11 +276,16 @@ sig
   val compare : t -> t -> int
   val equal : t -> t -> bool
   val hash : t -> int
+
+  module Set : CSig.USetS with type elt = t
+  module Map : Map.UExtS with type key = t and module Set := Set
+  module Pred : Predicate.S with type elt = t
+
 end
 
-module KNset  : CSig.USetS with type elt = KerName.t
-module KNpred : Predicate.S with type elt = KerName.t
-module KNmap  : Map.UExtS with type key = KerName.t and module Set := KNset
+module KNset = KerName.Set [@@deprecated "Use KerName.Set"]
+module KNpred = KerName.Pred [@@deprecated "Use KerName.Pred"]
+module KNmap = KerName.Map [@@deprecated "Use KerName.Map"]
 
 (** {6 Signature for quotiented names} *)
 
@@ -362,9 +337,6 @@ sig
   module UserOrd : EqType with type t = t
   (** Equality functions over the user name. *)
 
-  module SyntacticOrd : EqType with type t = t
-  (** Equality functions using both names, for low-level uses. *)
-
   val canonize : t -> t
   (** Returns the canonical version of the name *)
 end
@@ -383,7 +355,7 @@ sig
   val make1 : KerName.t -> t
   (** Special case of [make] where the user name is canonical.  *)
 
-  val make2 : ModPath.t -> Label.t -> t
+  val make2 : ModPath.t -> Id.t -> t
   (** Shortcut for [(make1 (KerName.make ...))] *)
 
   (** Projections *)
@@ -394,7 +366,7 @@ sig
   val modpath : t -> ModPath.t
   (** Shortcut for [KerName.modpath (user ...)] *)
 
-  val label : t -> Label.t
+  val label : t -> Id.t
   (** Shortcut for [KerName.label (user ...)] *)
 
   (** Comparisons *)
@@ -407,7 +379,7 @@ sig
   val hash : t -> int [@@ocaml.deprecated "(8.13) Use QConstant.hash"]
   (** Hashing function *)
 
-  val change_label : t -> Label.t -> t
+  val change_label : t -> Id.t -> t
   (** Builds a new constant name with a different label *)
 
   (** Displaying *)
@@ -454,7 +426,7 @@ sig
   val make1 : KerName.t -> t
   (** Special case of [make] where the user name is canonical.  *)
 
-  val make2 : ModPath.t -> Label.t -> t
+  val make2 : ModPath.t -> Id.t -> t
   (** Shortcut for [(make1 (KerName.make ...))] *)
 
   (** Projections *)
@@ -465,7 +437,7 @@ sig
   val modpath : t -> ModPath.t
   (** Shortcut for [KerName.modpath (user ...)] *)
 
-  val label : t -> Label.t
+  val label : t -> Id.t
   (** Shortcut for [KerName.label (user ...)] *)
 
   (** Comparisons *)
@@ -494,7 +466,14 @@ sig
 end
 
 module Mindset : CSig.USetS with type elt = MutInd.t
-module Mindmap : Map.UExtS with type key = MutInd.t and module Set := Mindset
+[@@ocaml.deprecated "(9.2) This will switch to user ordering at some point in \
+the future. In the meantime either use the _env variant or the Q-variant from \
+Environ, depending on the desired semantics."]
+module Mindmap : Map.UExtS with type key = MutInd.t and module Set := Mindset [@ocaml.warning "-3"]
+[@@ocaml.deprecated "(9.2) This will switch to user ordering at some point in \
+the future. In the meantime either use the _env variant or the Q-variant from \
+Environ, depending on the desired semantics."]
+
 module Mindmap_env : CMap.UExtS with type key = MutInd.t
 
 module Ind :
@@ -528,11 +507,26 @@ end
 type constructor = Construct.t
 
 module Indset : CSet.ExtS with type elt = inductive
+[@@ocaml.deprecated "(9.2) This will switch to user ordering at some point in \
+the future. In the meantime either use the _env variant or the Q-variant from \
+Environ, depending on the desired semantics."]
 module Constrset : CSet.ExtS with type elt = constructor
+[@@ocaml.deprecated "(9.2) This will switch to user ordering at some point in \
+the future. In the meantime either use the _env variant or the Q-variant from \
+Environ, depending on the desired semantics."]
+
 module Indset_env : CSet.ExtS with type elt = inductive
 module Constrset_env : CSet.ExtS with type elt = constructor
-module Indmap : CMap.ExtS with type key = inductive and module Set := Indset
-module Constrmap : CMap.ExtS with type key = constructor and module Set := Constrset
+
+module Indmap : CMap.ExtS with type key = inductive and module Set := Indset [@ocaml.warning "-3"]
+[@@ocaml.deprecated "(9.2) This will switch to user ordering at some point in \
+the future. In the meantime either use the _env variant or the Q-variant from \
+Environ, depending on the desired semantics."]
+module Constrmap : CMap.ExtS with type key = constructor and module Set := Constrset [@ocaml.warning "-3"]
+[@@ocaml.deprecated "(9.2) This will switch to user ordering at some point in \
+the future. In the meantime either use the _env variant or the Q-variant from \
+Environ, depending on the desired semantics."]
+
 module Indmap_env : CMap.ExtS with type key = inductive and module Set := Indset_env
 module Constrmap_env : CMap.ExtS with type key = constructor and module Set := Constrset_env
 
@@ -563,23 +557,19 @@ val eq_table_key : ('a -> 'a -> bool) -> 'a tableKey -> 'a tableKey -> bool
 val hash_table_key : ('a -> int) -> 'a tableKey -> int
 val eq_constant_key : Constant.t -> Constant.t -> bool
 
-(** equalities on constant and inductive names (for the checker) *)
-
-val eq_ind_chk : inductive -> inductive -> bool
-
 (** {5 Module paths} *)
 
 type module_path = ModPath.t =
   | MPfile of DirPath.t
   | MPbound of MBId.t
-  | MPdot of ModPath.t * Label.t
+  | MPdot of ModPath.t * Id.t
 [@@ocaml.deprecated "(8.8) Alias type"]
 
 module Projection : sig
   module Repr : sig
     type t
 
-    val make : inductive -> proj_npars:int -> proj_arg:int -> Label.t -> t
+    val make : inductive -> proj_npars:int -> proj_arg:int -> Id.t -> t
 
     include QNameS with type t := t
 
@@ -590,7 +580,7 @@ module Projection : sig
     val mind : t -> MutInd.t
     val npars : t -> int
     val arg : t -> int
-    val label : t -> Label.t
+    val label : t -> Id.t
 
     val equal : t -> t -> bool [@@ocaml.deprecated "(8.13) Use QProjection.equal"]
     val hash : t -> int [@@ocaml.deprecated "(8.13) Use QProjection.hash"]
@@ -618,7 +608,7 @@ module Projection : sig
   val inductive : t -> inductive
   val npars : t -> int
   val arg : t -> int
-  val label : t -> Label.t
+  val label : t -> Id.t
   val unfolded : t -> bool
   val unfold : t -> t
 
@@ -681,8 +671,12 @@ module GlobRef : sig
     with type key = t and module Set := Set_env
 
   module Set : CSig.USetS with type elt = t
+  [@@ocaml.deprecated "(9.2) This will switch to user ordering at some point in \
+  the future. In the meantime either use the _env variant or the Q-variant from \
+  Environ, depending on the desired semantics."]
+
   module Map : Map.UExtS
-    with type key = t and module Set := Set
+    with type key = t and module Set := Set [@@ocaml.warning "-3"]
 
   val print : t -> Pp.t
   (** Print internal representation (not to be used for user-facing messages). *)
@@ -696,3 +690,39 @@ type lname = Name.t CAst.t
 type lstring = string CAst.t
 
 val lident_eq : lident -> lident -> bool
+
+(** Deprecated *)
+module Label : sig
+  type t = Id.t
+  (** Type of labels *)
+
+  val equal : t -> t -> bool
+  (** Equality over labels *)
+
+  val compare : t -> t -> int
+  (** Comparison over labels. *)
+
+  val hash : t -> int
+  (** Hash over labels. *)
+
+  val make : string -> t
+  (** Create a label out of a string. *)
+
+  val of_id : Id.t -> t
+  (** Conversion from an identifier. *)
+
+  val to_id : t -> Id.t
+  (** Conversion to an identifier. *)
+
+  val to_string : t -> string
+  (** Conversion to string. *)
+
+  val print : t -> Pp.t
+  (** Pretty-printer. *)
+
+  module Set : Set.ExtS with type elt = t
+  module Map : Map.ExtS with type key = t and module Set := Set
+
+  val hcons : t Hashcons.f
+
+end [@@deprecated "(9.2) Use Id"]

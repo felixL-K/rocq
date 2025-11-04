@@ -15,27 +15,26 @@ open Tacexpr
 
 (** Nametab for tactics *)
 
-module KnTab = Nametab.Make(KerName)
+module TacticV = struct
+  include KerName
+  let is_var _ = None
+  module Map = KerName.Map
+  let stage = Summary.Stage.Interp
+  let summary_name = "ltac1tab"
+end
+module TacticTab = Nametab.EasyNoWarn(TacticV)()
 
-let tactic_tab = Summary.ref ~name:"LTAC-NAMETAB" (KnTab.empty, KNmap.empty)
+let push_tactic vis sp kn = TacticTab.push vis sp kn
 
-let push_tactic vis sp kn =
-  let (tab, revtab) = !tactic_tab in
-  let tab = KnTab.push vis sp kn tab in
-  let revtab = KNmap.add kn sp revtab in
-  tactic_tab := (tab, revtab)
+let locate_tactic qid = TacticTab.locate qid
 
-let locate_tactic qid = KnTab.locate qid (fst !tactic_tab)
+let locate_extended_all_tactic qid = TacticTab.locate_all qid
 
-let locate_extended_all_tactic qid = KnTab.find_prefixes qid (fst !tactic_tab)
+let exists_tactic kn = TacticTab.exists kn
 
-let exists_tactic kn = KnTab.exists kn (fst !tactic_tab)
+let path_of_tactic kn = TacticTab.to_path kn
 
-let path_of_tactic kn = KNmap.find kn (snd !tactic_tab)
-
-let shortest_qualid_of_tactic kn =
-  let sp = KNmap.find kn (snd !tactic_tab) in
-  KnTab.shortest_qualid Id.Set.empty sp (fst !tactic_tab)
+let shortest_qualid_of_tactic kn = TacticTab.shortest_qualid Id.Set.empty kn
 
 (** Tactic notations (TacAlias) *)
 
@@ -47,16 +46,16 @@ type alias_tactic =
   }
 
 let alias_map = Summary.ref ~name:"tactic-alias"
-  (KNmap.empty : alias_tactic KNmap.t)
+  (KerName.Map.empty : alias_tactic KerName.Map.t)
 
 let register_alias key tac =
-  alias_map := KNmap.add key tac !alias_map
+  alias_map := KerName.Map.add key tac !alias_map
 
 let interp_alias key =
-  try KNmap.find key !alias_map
+  try KerName.Map.find key !alias_map
   with Not_found -> CErrors.anomaly (str "Unknown tactic alias: " ++ KerName.print key ++ str ".")
 
-let check_alias key = KNmap.mem key !alias_map
+let check_alias key = KerName.Map.mem key !alias_map
 
 (** ML tactic extensions (TacML) *)
 
@@ -113,14 +112,14 @@ type ltac_entry = {
 }
 
 let mactab =
-  Summary.ref (KNmap.empty : ltac_entry KNmap.t)
+  Summary.ref (KerName.Map.empty : ltac_entry KerName.Map.t)
     ~name:"tactic-definition"
 
 let ltac_entries () = !mactab
 
-let interp_ltac r = (KNmap.find r !mactab).tac_body
+let interp_ltac r = (KerName.Map.find r !mactab).tac_body
 
-let is_ltac_for_ml_tactic r = (KNmap.find r !mactab).tac_for_ml
+let is_ltac_for_ml_tactic r = (KerName.Map.find r !mactab).tac_for_ml
 
 let add ~depr kn b t =
   let entry = {
@@ -130,14 +129,14 @@ let add ~depr kn b t =
     tac_deprecation = depr;
   }
   in
-  mactab := KNmap.add kn entry !mactab
+  mactab := KerName.Map.add kn entry !mactab
 
 let replace kn path t =
   let entry _ e = { e with tac_body = t; tac_redef = path :: e.tac_redef } in
-  mactab := KNmap.modify kn entry !mactab
+  mactab := KerName.Map.modify kn entry !mactab
 
 let tac_deprecation kn =
-  try (KNmap.find kn !mactab).tac_deprecation with Not_found -> None
+  try (KerName.Map.find kn !mactab).tac_deprecation with Not_found -> None
 
 type tacdef = {
   local : bool;

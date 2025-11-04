@@ -106,7 +106,7 @@ CI_TARGETS= \
     ci-trakt \
     ci-unimath \
     ci-verdi_raft \
-    ci-vscoq \
+    ci-vsrocq \
     ci-vst \
     ci-waterproof
 
@@ -114,7 +114,7 @@ CI_VIRTUAL_TARGETS= \
     ci-elpi_hb \
     ci-platform_full
 
-.PHONY: ci-all $(CI_TARGETS) $(CI_VIRTUAL_TARGETS)
+.PHONY: ci-all ci-update ci-reset $(CI_TARGETS) $(CI_VIRTUAL_TARGETS)
 
 ci-help:
 	echo '*** Coq CI system, please specify a target to build.'
@@ -167,7 +167,7 @@ ci-bedrock2: ci-coqutil ci-riscv_coq ci-kami
 ci-bedrock2_examples: ci-bedrock2
 ci-rupicola: ci-bedrock2 ci-coqutil
 ci-fiat_crypto: ci-coqprime ci-rewriter ci-bedrock2 ci-coqutil ci-rupicola
-ci-fiat_crypto_legacy: ci-stdlib
+ci-fiat_crypto_legacy: ci-coqprime
 ci-fiat_crypto_ocaml: ci-fiat_crypto
 ci-fiat_parsers: ci-stdlib
 
@@ -265,6 +265,14 @@ ci-platform_full: $(CI_PLATFORM_FULL)
 # Generic rule, we use make to ease CI integration
 $(CI_TARGETS): ci-%:
 	+./dev/ci/ci-wrapper.sh $*
+
+# Helper to update all CI repositories already downloaded
+ci-update:
+	./dev/ci/ci-update.sh
+
+# Helper to reset all CI repositories already downloaded
+ci-reset:
+	./dev/ci/ci-reset.sh
 
 # if we do eg "make states ci-foo", ci-foo will wait for states
 # if we just do "make ci-foo" it will just run ci-foo

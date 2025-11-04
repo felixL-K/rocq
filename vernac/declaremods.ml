@@ -237,7 +237,7 @@ module type StagedModS = sig
   val get_applications : typexpr module_alg_expr -> ModPath.t * ModPath.t list
   val debug_print_modtab : unit -> Pp.t
 
-  module ModObjs : sig val all : unit -> module_objects MPmap.t end
+  module ModObjs : sig val all : unit -> module_objects ModPath.Map.t end
 
   val close_section : unit -> unit
 
@@ -319,13 +319,13 @@ module ModSubstObjs :
  end =
  struct
    let table =
-     Summary.ref ~stage:Actions.stage (MPmap.empty : substitutive_objects MPmap.t)
+     Summary.ref ~stage:Actions.stage (ModPath.Map.empty : substitutive_objects ModPath.Map.t)
        ~name:Actions.substobjs_table_name
    let missing_handler = ref (fun mp -> assert false)
    let set_missing_handler f = (missing_handler := f)
-   let set mp objs = (table := MPmap.add mp objs !table)
+   let set mp objs = (table := ModPath.Map.add mp objs !table)
    let get mp =
-     try MPmap.find mp !table with Not_found -> !missing_handler mp
+     try ModPath.Map.find mp !table with Not_found -> !missing_handler mp
  end
 
 let expand_aobjs = function
@@ -402,14 +402,14 @@ module ModObjs :
  sig
    val set : ModPath.t -> module_objects -> unit
    val get : ModPath.t -> module_objects (* may raise Not_found *)
-   val all : unit -> module_objects MPmap.t
+   val all : unit -> module_objects ModPath.Map.t
  end =
  struct
    let table =
-     Summary.ref ~stage:Actions.stage (MPmap.empty : module_objects MPmap.t)
+     Summary.ref ~stage:Actions.stage (ModPath.Map.empty : module_objects ModPath.Map.t)
        ~name:Actions.modobjs_table_name
-   let set mp objs = (table := MPmap.add mp objs !table)
-   let get mp = MPmap.find mp !table
+   let set mp objs = (table := ModPath.Map.add mp objs !table)
+   let get mp = ModPath.Map.find mp !table
    let all () = !table
  end
 
@@ -537,7 +537,7 @@ and collect_export f (f',mp) (exports,objs as acc) =
   match filter_and f f' with
   | None -> acc
   | Some f ->
-    let exports' = MPmap.update mp (function
+    let exports' = ModPath.Map.update mp (function
         | None -> Some f
         | Some f0 ->
           let f' = filter_or f f0 in
@@ -556,7 +556,7 @@ and collect_exports f i mpl acc =
   else acc
 
 let collect_modules mpl =
-  List.fold_left (fun acc fmp -> collect_module fmp acc)  (MPmap.empty, []) (List.rev mpl)
+  List.fold_left (fun acc fmp -> collect_module fmp acc)  (ModPath.Map.empty, []) (List.rev mpl)
 
 let open_modtype i ((sp,kn),_) =
   let mp = mp_of_kn kn in
@@ -603,7 +603,7 @@ and open_include f i (prefix, aobjs) =
   open_objects exp_substituted_view f i prefix aobjs.exp_algebraic_objects
 
 and open_export f i mpl =
-  let _,objs = collect_exports f i mpl (MPmap.empty, []) in
+  let _,objs = collect_exports f i mpl (ModPath.Map.empty, []) in
   List.iter (fun (f,o) -> open_object (fun x -> x) f 1 o) objs
 
 and open_keep f i ((sp,kn),kobjs) =
@@ -664,7 +664,7 @@ let import_modules ~export mpl =
     the ModSubstObjs table, we compensate this by explicit traversal
     of Module Types inner objects when needed. Quite a hack... *)
 
-let mp_id mp id = MPdot (mp, Label.of_id id)
+let mp_id mp id = MPdot (mp, id)
 
 let rec register_mod_objs mp obj = match obj with
   | ModuleObject (id,sobjs) -> ModSubstObjs.set (mp_id mp id) sobjs
@@ -706,7 +706,7 @@ let rec replace_module_object idl mp0 objs0 mp1 objs1 =
   | _,[] -> []
   | id::idl,(ModuleObject (id', sobjs))::tail when Id.equal id id' ->
     begin
-      let mp_id = MPdot(mp0, Label.of_id id) in
+      let mp_id = MPdot(mp0, id) in
       let objs = match idl with
         | [] -> subst_objects (map_mp mp1 mp_id (empty_delta_resolver mp_id)) objs1
         | _ ->
@@ -752,7 +752,7 @@ let debug_print_modtab () =
     let objs = List.length modobjs.module_substituted_objects + List.length modobjs.module_keep_objects.keep_objects in
     s ++ str (ModPath.to_string mp) ++ spc () ++ pr_seg objs
   in
-  let modules = MPmap.fold pr_modinfo (ModObjs.all ()) (mt ()) in
+  let modules = ModPath.Map.fold pr_modinfo (ModObjs.all ()) (mt ()) in
   hov 0 modules
 
 let add_discharged_item : Lib.discharged_item -> unit = function
@@ -864,7 +864,7 @@ let start_module_core id args res =
         Some (mte, inl), Enforce (mte, base, kind, inl)
     | Check resl -> None, Check (build_subtypes resl)
   in
-  let mp = ModPath.MPdot((openmod_syntax_info ()).cur_mp, Label.of_id id) in
+  let mp = ModPath.MPdot((openmod_syntax_info ()).cur_mp, id) in
   mp, res_entry_o, mbids, sign, args
 
 let start_module export id args res =
@@ -924,7 +924,7 @@ let declare_module id args res mexpr_o =
   let fs = Summary.Synterp.freeze_summaries () in
   (* We simulate the beginning of an interactive module,
      then we adds the module parameters to the global env. *)
-  let mp = ModPath.MPdot((openmod_syntax_info ()).cur_mp, Label.of_id id) in
+  let mp = ModPath.MPdot((openmod_syntax_info ()).cur_mp, id) in
   let args = intern_args args in
   let mbids = List.flatten @@ List.map fst args in
   let mty_entry_o = match res with
@@ -962,13 +962,13 @@ module Interp = struct
 
 (** {6 Auxiliary functions concerning subtyping checks} *)
 
-let check_sub mp mtb sub_mtb_l =
+let check_sub env mp sub_mtb_l =
   let fold sub_mtb (cst, env) =
     let state = ((Environ.universes env, cst), Reductionops.inferred_universes) in
-    let graph, cst = Subtyping.check_subtypes state env mp mtb mp sub_mtb in
-    (cst, Environ.set_universes graph env)
+    let ugraph, cst = Subtyping.check_subtypes state env mp mp sub_mtb in
+    (cst, Environ.set_universes ugraph env)
   in
-  let cst, _ = List.fold_right fold sub_mtb_l (Univ.Constraints.empty, Global.env ()) in
+  let cst, _ = List.fold_right fold sub_mtb_l (Univ.Constraints.empty, env) in
   Global.add_constraints cst
 
 (** This function checks if the type calculated for the module [mp] is
@@ -976,11 +976,7 @@ let check_sub mp mtb sub_mtb_l =
     the global environment. *)
 
 let check_subtypes mp sub_mtb_l =
-  let mb =
-    try Global.lookup_module mp with Not_found -> assert false
-  in
-  let mtb = Modops.module_type_of_module mb in
-  check_sub mp mtb sub_mtb_l
+  check_sub (Global.env ()) mp sub_mtb_l
 
 (** Same for module type [mp] *)
 
@@ -988,7 +984,8 @@ let check_subtypes_mt mp sub_mtb_l =
   let mtb =
     try Global.lookup_modtype mp with Not_found -> assert false
   in
-  check_sub mp mtb sub_mtb_l
+  let env = Modops.add_module mp (module_body_of_type mtb) (Global.env ()) in
+  check_sub env mp sub_mtb_l
 
 let current_modresolver () =
   Safe_typing.delta_of_senv @@ Global.safe_env ()
@@ -1002,13 +999,23 @@ let current_struct () =
 let build_subtypes env mp args mtys =
   let (ctx, ans) = List.fold_left_map
     (fun ctx (mte,base,kind,inl) ->
-       let mte, ctx' = Modintern.interp_module_ast env Modintern.ModType base mte in
-       let env = Environ.push_context_set ~strict:true ctx' env in
-       let ctx = Univ.ContextSet.union ctx ctx' in
-       let state = ((Environ.universes env, Univ.Constraints.empty), Reductionops.inferred_universes) in
-       let mtb, (_, cst), _ = Mod_typing.translate_modtype state vm_state env mp inl (args,mte) in
-       let ctx = Univ.ContextSet.add_constraints cst ctx in
-       ctx, mtb)
+      let mte, ctx' = Modintern.interp_module_ast env Modintern.ModType base mte in
+      let env = Environ.push_context_set ~strict:true ctx' env in
+      let ctx = Univ.ContextSet.union ctx ctx' in
+      let state = ((Environ.universes env, Univ.Constraints.empty), Reductionops.inferred_universes) in
+      (* functor arguments are already part of the env, we compute the type
+         and requantify over them *)
+      let mtb, (_, cst), _ = Mod_typing.translate_modtype state vm_state env mp inl ([], mte) in
+      let fold (mbid, mtb, _, _) accu =
+        MoreFunctor (mbid, mtb, accu)
+      in
+      (* XXX: parameters will be rechecked for subtyping, even though we
+         statically know they are the same as the ones of the ambient
+         module *)
+      let sign = List.fold_right fold args (mod_type mtb) in
+      let mtb = make_module_type sign (mod_delta mtb) in
+      let ctx = Univ.ContextSet.add_constraints cst ctx in
+      ctx, mtb)
     Univ.ContextSet.empty mtys
   in
   (ans, ctx)
@@ -1035,10 +1042,11 @@ let intern_arg (acc, cst) (mbidl,(mty, base, kind, inl)) =
     let id = MBId.to_id mbid in
     let sp = Libnames.make_path DirPath.empty id in
     let mp = MPbound mbid in
-    let resolver = Global.add_module_parameter mbid mty inl in
+    let mtb = Global.add_module_parameter mbid mty inl in
+    let resolver = mod_delta mtb in
     let sobjs = subst_sobjs (map_mp mp0 mp resolver) sobjs in
     InterpVisitor.load_module 1 sp mp sobjs;
-    (mbid,mty,inl)::acc
+    (mbid, mtb, mty, inl) :: acc
   in
   let acc = List.fold_left fold acc mbidl in
   (acc, Univ.ContextSet.union cst cst')
@@ -1159,6 +1167,7 @@ let declare_module id args res mexpr_o =
   in
   let env = Environ.push_context_set ctx' env in
   let ctx = Univ.ContextSet.union ctx ctx' in
+  let params = List.map (fun (mbid, _, mte, b) -> (mbid, mte, b)) params in
   let entry, inl_res = match mexpr_entry_o, mty_entry_o with
     | None, None -> assert false (* No body, no type ... *)
     | None, Some (typ, inl) -> MType (params, typ), inl
@@ -1204,7 +1213,7 @@ module RawModTypeOps = struct
 module Synterp = struct
 
 let start_modtype_core id cur_mp args mtys =
-  let mp = ModPath.MPdot(cur_mp, Label.of_id id) in
+  let mp = ModPath.MPdot(cur_mp, id) in
   let args = RawModOps.Synterp.intern_args args in
   let mbids = List.flatten @@ List.map (fun (mbidl,_) -> mbidl) args in
   let sub_mty_l = RawModOps.Synterp.build_subtypes mtys in
@@ -1305,6 +1314,7 @@ let declare_modtype id args mtys (mte,base,kind,inl) =
   let state = ((Global.universes (), Univ.Constraints.empty), Reductionops.inferred_universes) in
   let _, (_, mte_cst), _ = Mod_typing.translate_modtype state vm_state env mp inl ([], mte) in
   let () = Global.push_context_set (Univ.Level.Set.empty,mte_cst) in
+  let params = List.map (fun (mbid, _, mte, b) -> (mbid, mte, b)) params in
   let entry = params, mte in
   let env = Global.env () in
   let sobjs = RawModOps.Interp.get_functor_sobjs false env inl entry in
@@ -1428,12 +1438,14 @@ let declare_one_include_core (me,base,kind,inl) =
   let () = Global.add_constraints cst in
   let () = assert (ModPath.equal cur_mp (Global.current_modpath ())) in
   (* Include Self support  *)
-  let mb = make_module_type (RawModOps.Interp.current_struct ()) (RawModOps.Interp.current_modresolver ()) in
+  let mb = make_module_body (RawModOps.Interp.current_struct ()) (RawModOps.Interp.current_modresolver ()) [] in
   let rec compute_sign sign =
     match sign with
     | MoreFunctor(mbid,mtb,str) ->
       let state = ((Global.universes (), Univ.Constraints.empty), Reductionops.inferred_universes) in
-      let (_, cst) = Subtyping.check_subtypes state (Global.env ()) cur_mp mb (MPbound mbid) mtb in
+      (* Module subcomponents are already part of env at this point *)
+      let env = Environ.shallow_add_module cur_mp mb (Global.env ()) in
+      let (_, cst) = Subtyping.check_subtypes state env cur_mp (MPbound mbid) mtb in
       let () = Global.add_constraints cst in
       let mpsup_delta = match mod_global_delta mb with
       | None -> assert false (* mb is guaranteed not to be a functor here *)
@@ -1691,7 +1703,7 @@ let iter_all_interp_segments f =
     List.iter (fun obj -> apply_obj prefix obj) modobjs.module_keep_objects.keep_objects
   in
   let apply_nodes (node, os) = List.iter (fun o -> apply_obj (Lib.node_prefix node) o) os in
-  MPmap.iter apply_mod_obj (InterpVisitor.ModObjs.all ());
+  ModPath.Map.iter apply_mod_obj (InterpVisitor.ModObjs.all ());
   List.iter apply_nodes (Lib.contents ())
 
 

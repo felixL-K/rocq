@@ -166,11 +166,9 @@ type hint_db = Hint_db.t
 
 type hnf = bool
 
-type hint_term
-
 type hints_entry =
-  | HintsResolveEntry of (hint_info * hnf * hint_term) list
-  | HintsImmediateEntry of hint_term list
+  | HintsResolveEntry of (hint_info * hnf * GlobRef.t) list
+  | HintsImmediateEntry of GlobRef.t list
   | HintsCutEntry of hints_path
   | HintsUnfoldEntry of Evaluable.t list
   | HintsTransparencyEntry of Evaluable.t hints_transparency_target * bool
@@ -198,8 +196,6 @@ val current_pure_db : unit -> hint_db list
 
 val add_hints : locality:hint_locality -> hint_db_name list -> hints_entry -> unit
 
-val hint_globref : GlobRef.t -> hint_term
-
 (** A constr which is Hint'ed will be:
    - (1) used as an Exact, if it does not start with a product
    - (2) used as an Apply, if its HNF starts with a product, and
@@ -225,15 +221,6 @@ val push_resolve_hyp :
 val make_local_hint_db : env -> evar_map -> ?ts:TransparentState.t -> bool -> delayed_open_constr list -> hint_db
 
 val make_db_list : hint_db_name list -> hint_db list
-
-val wrap_hint_warning : 'a Proofview.tactic -> 'a Proofview.tactic
-(** Use around toplevel calls to hint-using tactics, to enable the tracking of
-    non-imported hints. Any tactic calling [run_hint] must be wrapped this
-    way. *)
-
-val wrap_hint_warning_fun : env -> evar_map ->
-  (evar_map -> 'a * evar_map) -> 'a * evar_map
-(** Variant of the above for non-tactics *)
 
 val fresh_hint : env -> evar_map -> hint -> evar_map * constr
 

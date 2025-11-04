@@ -29,8 +29,13 @@ let warn_default_mode = CWarnings.create ~name:"class-declaration-default-mode" 
   Pp.(fun (gr, m) -> hov 2 (str "Using an inferred default mode: " ++ prlist_with_sep spc Hints.pp_hint_mode m ++
     spc () ++ str "for" ++ spc () ++ Printer.pr_global gr))
 
-let set_typeclass_transparency ~locality c b =
-  Hints.add_hints ~locality [typeclasses_db]
+let set_typeclass_transparency ?typeclasses_db ~locality c b =
+  let db_name = match typeclasses_db with
+  | None -> Class_tactics.typeclasses_db
+  | Some s -> s
+  in
+  let () = check_typeclasses_db () in
+  Hints.add_hints ~locality [db_name]
     (Hints.HintsTransparencyEntry (Hints.HintsReferences c, b))
 
 let set_typeclass_transparency_com ~locality refs b =
@@ -42,16 +47,17 @@ let set_typeclass_transparency_com ~locality refs b =
   in
   set_typeclass_transparency ~locality refs b
 
-let set_typeclass_mode ~locality c b =
+let set_typeclass_mode ?(typeclasses_db=typeclasses_db) ~locality c b =
+  let () = check_typeclasses_db () in
   Hints.add_hints ~locality [typeclasses_db]
     (Hints.HintsModeEntry (c, b))
 
-let add_instance_hint gr ~locality info =
-  let inst = Hints.hint_globref gr in
-     Flags.silently (fun () ->
-       Hints.add_hints ~locality [typeclasses_db]
-          (Hints.HintsResolveEntry
-             [info, false, inst])) ()
+let add_instance_hint ?(typeclasses_db=typeclasses_db) gr ~locality info =
+  let () = check_typeclasses_db () in
+  Flags.silently (fun () ->
+    Hints.add_hints ~locality [typeclasses_db]
+      (Hints.HintsResolveEntry
+          [info, false, gr])) ()
 
 (* short names without opening all Hints *)
 type locality = Hints.hint_locality = Local | Export | SuperGlobal
@@ -80,7 +86,7 @@ let add_instance_base inst =
  *)
 let perform_instance i =
   let i = { is_class = i.class_name; is_info = i.info; is_impl = i.instance } in
-  Typeclasses.load_instance i
+  Typeclasses.load_instance (Global.env ()) i
 
 let cache_instance inst =
   perform_instance inst;
@@ -194,7 +200,7 @@ let declare_instance ?(warn = false) env sigma info local glob =
  * classes persistent object
  *)
 
-let cache_class c = load_class c
+let cache_class c = load_class (Global.env ()) c
 
 let subst_class (subst,cl) =
   let do_subst_con c = Mod_subst.subst_constant subst c
@@ -256,7 +262,7 @@ let add_class cl =
 let intern_info {hint_priority;hint_pattern} =
   let env = Global.env() in
   let sigma = Evd.from_env env in
-  let hint_pattern = Option.map (Constrintern.intern_constr_pattern env sigma) hint_pattern in
+  let hint_pattern = Option.map (Constrintern.interp_constr_pattern env sigma) hint_pattern in
   {hint_priority;hint_pattern}
 
 (** TODO: add subinstances *)
@@ -378,15 +384,15 @@ let declare_instance_open sigma ?hook ~tac ~locality ~poly (id:lident) pri impar
           Tactics.reduce_after_refine;
         ]
       in
-      let lemma, _ = Declare.Proof.by init_refine lemma in
+      let lemma, _ = Declare.Proof.by (Global.env ()) init_refine lemma in
       lemma
     | None ->
-      let lemma, _ = Declare.Proof.by (Tactics.auto_intros_tac ids) lemma in
+      let lemma, _ = Declare.Proof.by (Global.env ()) (Tactics.auto_intros_tac ids) lemma in
       lemma
   in
   match tac with
   | Some tac ->
-    let lemma, _ = Declare.Proof.by tac lemma in
+    let lemma, _ = Declare.Proof.by (Global.env ()) tac lemma in
     lemma
   | None ->
     lemma
@@ -517,13 +523,13 @@ let do_instance_program ~pm env env' sigma ?hook ~locality ~poly cty k ctx ctx' 
   else
     declare_instance_program pm env sigma ~locality ~poly id pri imps decl term termtype
 
-let typeclass_univ_instance (cl, u) =
+let typeclass_univ_instance env (cl, u) =
   assert (UVars.eq_sizes (UVars.AbstractContext.size cl.cl_univs) (EInstance.length u));
   let subst_ctx c = Context.Rel.map (Vars.subst_instance_constr u) (EConstr.of_rel_context c) in
   let clu_isstruct = match cl.cl_impl with
     | ConstRef _ -> None
     | ConstructRef _ | VarRef _ -> assert false
-    | IndRef ind -> match Structures.Structure.find ind with
+    | IndRef ind -> match Structures.Structure.find env ind with
       | exception Not_found -> None
       | s -> Some s
   in
@@ -545,7 +551,7 @@ let interp_instance_context ~program_mode env ctx pl tclass =
   let ctx', c = decompose_prod_decls sigma c' in
   let ctx'' = ctx' @ ctx in
   let (k, u), args = Typeclasses.dest_class_app (push_rel_context ctx'' env) sigma c in
-  let cl = typeclass_univ_instance (k, u) in
+  let cl = typeclass_univ_instance env (k, u) in
   let args = List.map of_constr args in
   let _, args =
     List.fold_right (fun decl (args, args') ->
@@ -561,7 +567,7 @@ let interp_instance_context ~program_mode env ctx pl tclass =
 let id_of_class env ref =
   let open GlobRef in
   match ref with
-    | ConstRef kn -> Label.to_id @@ Constant.label kn
+    | ConstRef kn -> Constant.label kn
     | IndRef (kn,i) ->
         let mip = (Environ.lookup_mind kn env).Declarations.mind_packets in
           mip.(0).Declarations.mind_typename

@@ -59,20 +59,7 @@ val add_ml_dir : string -> unit
 (** Tests if we can load ML files *)
 val has_dynlink : bool
 
-val module_is_known : string -> bool
-
 (** {5 Initialization functions} *)
-
-(** Declare a plugin which has been linked.  A plugin is
-    a findlib library name. Usually, this will be called automatically
-    when use do [DECLARE PLUGIN "pkg.lib"] in the .mlg file.
-
-    The main effect is that dynlink will not be attempted for this
-    plugin, so eg if it was statically linked Coq will not try and
-    fail to find the cmxs.
-*)
-val add_known_module : string -> unit
-(* EJGA: Todo, this could take a PluginSpec.t at some point *)
 
 (** Declare a initialization function. The initialization function is
     called in Declare ML Module, including reruns after backtracking
@@ -91,13 +78,28 @@ val add_init_function : string -> (unit -> unit) -> unit
     or Requiring a file which contains the Declare ML Module.
     This allows to have effects which depend on the module when
     command was run in, eg add a named libobject which will use it for the prefix.
+
+    The callback runs in the synterp phase, use
+    [declare_cache_obj_full] if you also need to interact with Interp
+    state.
 *)
 val declare_cache_obj : (unit -> unit) -> string -> unit
 
+type cache_obj = CacheObj : { synterp : unit -> 'a; interp : 'a -> unit } -> cache_obj
+
+val interp_only_obj : (unit -> unit) -> cache_obj
+
+(** Register a callback with an interp phase. *)
+val declare_cache_obj_full : cache_obj -> string -> unit
+
 (** {5 Declaring modules} *)
 
+type interp_fun
+
+val run_interp_fun : interp_fun -> unit
+
 (** Implementation of the [Declare ML Module] vernacular command. *)
-val declare_ml_modules : Vernacexpr.locality_flag -> string list -> unit
+val declare_ml_modules : Vernacexpr.locality_flag -> string list -> interp_fun
 
 (** {5 Utilities} *)
 

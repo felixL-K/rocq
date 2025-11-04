@@ -21,14 +21,14 @@ open EConstr
 open Glob_term
 open Ltac_pretype
 
-val add_bidirectionality_hint : GlobRef.t -> int -> unit
+val add_bidirectionality_hint : env -> GlobRef.t -> int -> unit
 (** A bidirectionality hint `n` for a global `g` tells the pretyper to use
     typing information from the context after typing the `n` for arguments of an
     application of `g`. *)
 
-val get_bidirectionality_hint : GlobRef.t -> int option
+val get_bidirectionality_hint : env -> GlobRef.t -> int option
 
-val clear_bidirectionality_hint : GlobRef.t -> unit
+val clear_bidirectionality_hint : env -> GlobRef.t -> unit
 
 (** An auxiliary function for searching for fixpoint guard indices *)
 
@@ -42,7 +42,8 @@ type possible_guard = {
 } (* Note: if no fix indices are given, it has to be a cofix *)
 
 val search_guard :
-  ?loc:Loc.t -> ?evars:CClosure.evar_handler -> env ->
+  ?loc:Loc.t -> ?evars:CClosure.evar_handler ->
+  ?elim_to:(Sorts.Quality.t -> Sorts.Quality.t -> bool) -> env ->
   possible_guard -> Constr.rec_declaration -> int array option
 
 val search_fix_guard : (* For Fixpoints only *)
@@ -81,8 +82,7 @@ type inference_flags = {
   expand_evars : bool;
   program_mode : bool;
   polymorphic : bool;
-  undeclared_evars_patvars : bool;
-  patvars_abstract : bool;
+  undeclared_evars_rr : bool;
   unconstrained_sorts : bool;
 }
 
@@ -180,8 +180,7 @@ type pretype_flags = {
   resolve_tc : bool;
   program_mode : bool;
   use_coercions : bool;
-  undeclared_evars_patvars : bool;
-  patvars_abstract : bool;
+  undeclared_evars_rr : bool;
   unconstrained_sorts : bool;
 }
 

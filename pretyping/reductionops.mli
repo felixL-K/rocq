@@ -309,14 +309,14 @@ val whd_betaiota_deltazeta_for_iota_state :
 
 exception PatternFailure
 val apply_rules : (state -> state) -> env -> evar_map -> EInstance.t ->
-  Declarations.rewrite_rule list -> Stack.t -> econstr * Stack.t
+  Declarations.machine_rewrite_rule list -> Stack.t -> econstr * Stack.t
 
 val is_head_evar : env -> evar_map -> constr -> bool
 
 exception AnomalyInConversion of exn
 
 (* inferred_universes just gathers the constraints. *)
-val inferred_universes : (UGraph.t * Univ.Constraints.t, UGraph.univ_inconsistency) Conversion.universe_compare
+val inferred_universes : (UGraph.t * Univ.Constraints.t, Conversion.graph_inconsistency) Conversion.universe_compare
 
 (** Deprecated *)
 

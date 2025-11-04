@@ -8,7 +8,6 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-open CErrors
 open Util
 open Names
 open Context
@@ -287,10 +286,7 @@ struct
   let variables env id = is_section_variable env id
 end
 
-type naming_mode =
-  | RenameExistingBut of VarSet.t
-  | FailIfConflict
-  | ProgramNaming of VarSet.t
+type naming_mode = VarSet.t
 
 let push_rel_decl_to_named_context
   ~hypnaming
@@ -324,28 +320,23 @@ let push_rel_decl_to_named_context
   in
   match extract_if_neq id na with
   | Some id0 ->
-    begin match hypnaming with
-    | RenameExistingBut f | ProgramNaming f ->
-      if f id0 then
-        (* spiwack: if [id0] is a section variable renaming it is
-            incorrect. We revert to a less robust behaviour where
-            the new binder has name [id]. Which amounts to the same
-            behaviour than when [id=id0]. *)
-        let d = decl |> NamedDecl.of_rel_decl (fun _ -> id) |> map_decl (csubst_subst sigma subst) in
-        (push_var id subst, Id.Set.add id avoid, push_named_context_val d nc)
-      else
-        (* spiwack: if [id<>id0], rather than introducing a new
-            binding named [id], we will keep [id0] (the name given
-            by the user) and rename [id0] into [id] in the named
-            context. Unless [id] is a section variable. *)
-        let subst = update_var id0 id subst in
-        let d = decl |> NamedDecl.of_rel_decl (fun _ -> id0) |> map_decl (csubst_subst sigma subst) in
-        let nc = replace_var_named_declaration id0 id nc in
-        let avoid = Id.Set.add id (Id.Set.add id0 avoid) in
-        (push_var id0 subst, avoid, push_named_context_val d nc)
-    | FailIfConflict ->
-       user_err Pp.(Id.print id0 ++ str " is already used.")
-    end
+    if hypnaming id0 then
+      (* spiwack: if [id0] is a section variable renaming it is
+          incorrect. We revert to a less robust behaviour where
+          the new binder has name [id]. Which amounts to the same
+          behaviour than when [id=id0]. *)
+      let d = decl |> NamedDecl.of_rel_decl (fun _ -> id) |> map_decl (csubst_subst sigma subst) in
+      (push_var id subst, Id.Set.add id avoid, push_named_context_val d nc)
+    else
+      (* spiwack: if [id<>id0], rather than introducing a new
+          binding named [id], we will keep [id0] (the name given
+          by the user) and rename [id0] into [id] in the named
+          context. Unless [id] is a section variable. *)
+      let subst = update_var id0 id subst in
+      let d = decl |> NamedDecl.of_rel_decl (fun _ -> id0) |> map_decl (csubst_subst sigma subst) in
+      let nc = replace_var_named_declaration id0 id nc in
+      let avoid = Id.Set.add id (Id.Set.add id0 avoid) in
+      (push_var id0 subst, avoid, push_named_context_val d nc)
   | None ->
     let d = decl |> NamedDecl.of_rel_decl (fun _ -> id) |> map_decl (csubst_subst sigma subst) in
     (push_var id subst, Id.Set.add id avoid, push_named_context_val d nc)
@@ -357,6 +348,11 @@ let csubst_instance subst ctx =
   | exception Not_found -> SList.default accu
   in
   List.fold_right fold ctx SList.empty
+
+let ext_rev_subst (subst, _, _) id0 =
+  match Id.Map.find id0 subst.csubst_rev with
+  | SRel n -> EConstr.mkRel (subst.csubst_len - n)
+  | SVar id -> EConstr.mkVar id
 
 let default_ext_instance (subst, _, ctx) =
   csubst_instance subst (named_context_of_val ctx)
@@ -395,11 +391,11 @@ let next_evar_name sigma naming = match naming with
 (* [new_evar] declares a new existential in an env env with type typ *)
 (* Converting the env into the sign of the evar to define *)
 let new_evar ?src ?filter ?relevance ?abstract_arguments ?candidates ?(naming = IntroAnonymous) ?typeclass_candidate
-    ?hypnaming env evd typ =
+    ?rrpat ?hypnaming env evd typ =
   let name = next_evar_name evd naming in
   let hypnaming = match hypnaming with
   | Some n -> n
-  | None -> RenameExistingBut (VarSet.variables (Global.env ()))
+  | None -> VarSet.variables (Global.env ())
   in
   let sign,typ',instance,subst = push_rel_context_to_named_context ~hypnaming env evd typ in
   let map c = csubst_subst evd subst c in
@@ -412,7 +408,7 @@ let new_evar ?src ?filter ?relevance ?abstract_arguments ?candidates ?(naming = 
   | Some r -> r
   | None -> ERelevance.relevant (* FIXME: relevant_of_type not defined yet *)
   in
-  let (evd, evk) = new_pure_evar sign evd typ' ?src ?filter ~relevance ?abstract_arguments ?candidates ?name
+  let (evd, evk) = new_pure_evar sign evd typ' ?src ?rrpat ?filter ~relevance ?abstract_arguments ?candidates ?name
     ?typeclass_candidate in
   (evd, EConstr.mkEvar (evk, instance))
 
@@ -791,8 +787,8 @@ let eq_constr_univs_test ~evd ~extended_evd t u =
   and u = EConstr.Unsafe.to_constr u in
   let sigma = ref extended_evd in
   let eq_universes _ u1 u2 =
-    let u1 = normalize_universe_instance !sigma u1 in
-    let u2 = normalize_universe_instance !sigma u2 in
+    let u1 = EConstr.EInstance.(kind !sigma (make u1)) in
+    let u2 = EConstr.EInstance.(kind !sigma (make u2)) in
     UGraph.check_eq_instances (universes !sigma) u1 u2
   in
   let eq_sorts s1 s2 =

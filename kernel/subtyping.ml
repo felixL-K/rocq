@@ -51,37 +51,37 @@ let add_mib_nameobjects mp l mib map =
     let map =
       Array.fold_right_i
       (fun i id map ->
-        Label.Map.add (Label.of_id id) (IndConstr((ip,i+1), mib)) map)
+        Id.Map.add id (IndConstr((ip,i+1), mib)) map)
       oib.mind_consnames
       map
     in
-      Label.Map.add (Label.of_id oib.mind_typename) (IndType (ip, mib)) map
+      Id.Map.add oib.mind_typename (IndType (ip, mib)) map
   in
   Array.fold_right_i add_mip_nameobjects mib.mind_packets map
 
 
 (* creates (namedobject/namedmodule) map for the whole signature *)
 
-type labmap = { objs : namedobject Label.Map.t; mods : namedmodule Label.Map.t }
+type labmap = { objs : namedobject Id.Map.t; mods : namedmodule Id.Map.t }
 
-let empty_labmap = { objs = Label.Map.empty; mods = Label.Map.empty }
+let empty_labmap = { objs = Id.Map.empty; mods = Id.Map.empty }
 
 let get_obj mp map l =
-  try Label.Map.find l map.objs
+  try Id.Map.find l map.objs
   with Not_found -> error_no_such_label_sub l (ModPath.to_string mp)
 
 let get_mod mp map l =
-  try Label.Map.find l map.mods
+  try Id.Map.find l map.mods
   with Not_found -> error_no_such_label_sub l (ModPath.to_string mp)
 
 let make_labmap mp list =
   let add_one (l,e) map =
    match e with
-    | SFBconst cb -> { map with objs = Label.Map.add l (Constant cb) map.objs }
-    | SFBrules _ -> { map with objs = Label.Map.add l Rules map.objs }
+    | SFBconst cb -> { map with objs = Id.Map.add l (Constant cb) map.objs }
+    | SFBrules _ -> { map with objs = Id.Map.add l Rules map.objs }
     | SFBmind mib -> { map with objs = add_mib_nameobjects mp l mib map.objs }
-    | SFBmodule mb -> { map with mods = Label.Map.add l (Module mb) map.mods }
-    | SFBmodtype mtb -> { map with mods = Label.Map.add l (Modtype mtb) map.mods }
+    | SFBmodule mb -> { map with mods = Id.Map.add l (Module mb) map.mods }
+    | SFBmodtype mtb -> { map with mods = Id.Map.add l (Modtype mtb) map.mods }
   in
   CList.fold_right add_one list empty_labmap
 
@@ -92,7 +92,8 @@ let check_conv_error error why state poly pb env a1 a2 =
   else match Conversion.generic_conv pb ~l2r:false TransparentState.full env state a1 a2 with
   | Result.Ok state -> state
   | Result.Error None -> error why
-  | Result.Error (Some e) -> error (IncompatibleUniverses e)
+  | Result.Error (Some (Univ e)) -> error (IncompatibleUniverses e)
+  | Result.Error (Some (Qual e)) -> error (IncompatibleQualities e)
 
 let check_universes error env u1 u2 =
   match u1, u2 with
@@ -141,16 +142,16 @@ let check_inductive (cst, ustate) trace env mp1 l info1 mp2 mib2 subst1 subst2 r
   in
 
   let check_packet cst p1 p2 =
-    let check f test why = if not (test (f p1) (f p2)) then error why in
-      check (fun p -> p.mind_consnames) (Array.equal Id.equal) NotSameConstructorNamesField;
-      check (fun p -> p.mind_typename) Id.equal NotSameInductiveNameInBlockField;
+    let check f test why = let fp2 = f p2 in if not (test (f p1) fp2) then error (why fp2) in
+      check (fun p -> p.mind_consnames) (Array.equal Id.equal) (fun _ -> NotSameConstructorNamesField);
+      check (fun p -> p.mind_typename) Id.equal (fun _ -> NotSameInductiveNameInBlockField);
       check (fun p -> p.mind_squashed) (Option.equal squash_info_equal)
-        (NotConvertibleInductiveField p2.mind_typename);
+        (fun _ -> NotConvertibleInductiveField p2.mind_typename);
       (* nf_lc later *)
       (* nf_arity later *)
       (* user_lc ignored *)
       (* user_arity ignored *)
-      check (fun p -> p.mind_nrealargs) Int.equal (NotConvertibleInductiveField p2.mind_typename); (* How can it fail since the type of inductive are checked below? [HH] *)
+      check (fun p -> p.mind_nrealargs) Int.equal (fun _ -> NotConvertibleInductiveField p2.mind_typename); (* How can it fail since the type of inductive are checked below? [HH] *)
       (* listrec ignored *)
       (* finite done *)
       (* nparams done *)
@@ -158,7 +159,26 @@ let check_inductive (cst, ustate) trace env mp1 l info1 mp2 mib2 subst1 subst2 r
       let ty1 = type_of_inductive ((mib1, p1), inst) in
       let ty2 = type_of_inductive ((mib2, p2), inst) in
       let cst = check_inductive_type cst p2.mind_typename ty1 ty2 in
-        cst
+      (* we check that records and their field names are preserved. *)
+      (** FIXME: this check looks nonsense *)
+      check (fun p -> p.mind_record <> NotRecord) (==) (fun x -> RecordFieldExpected x);
+      if p1.mind_record <> NotRecord then begin
+        let rec names_prod_letin t = match kind t with
+          | Prod(n,_,t) -> n.binder_name::(names_prod_letin t)
+          | LetIn(n,_,_,t) -> n.binder_name::(names_prod_letin t)
+          | Cast(t,_,_) -> names_prod_letin t
+          | _ -> []
+        in
+        assert (Int.equal (Array.length p1.mind_user_lc) 1);
+        assert (Int.equal (Array.length p2.mind_user_lc) 1);
+        check (fun p ->
+            (* can nparamdecls depend on which mib we look at? *)
+            let nparamdecls = List.length mib1.mind_params_ctxt in
+            let names = names_prod_letin (p.mind_user_lc.(0)) in
+            snd (List.chop nparamdecls names)) (List.equal Name.equal)
+          (fun x -> RecordProjectionsExpected x);
+      end;
+      cst
   in
   let mind = MutInd.make1 kn1 in
   let check_cons_types i cst p1 p2 =
@@ -172,7 +192,7 @@ let check_inductive (cst, ustate) trace env mp1 l info1 mp2 mib2 subst1 subst2 r
   in
   let check f test why = if not (test (f mib1) (f mib2)) then error (why (f mib2)) in
   check (fun mib -> mib.mind_finite<>CoFinite) (==) (fun x -> FiniteInductiveFieldExpected x);
-  check (fun mib -> mib.mind_ntypes) Int.equal (fun x -> InductiveNumbersFieldExpected x);
+  check Declareops.mind_ntypes Int.equal (fun x -> InductiveNumbersFieldExpected x);
   assert (List.is_empty mib1.mind_hyps && List.is_empty mib2.mind_hyps);
   assert (Array.length mib1.mind_packets >= 1
             && Array.length mib2.mind_packets >= 1);
@@ -191,26 +211,6 @@ let check_inductive (cst, ustate) trace env mp1 l info1 mp2 mib2 subst1 subst2 r
                     (subst_mind subst2 (MutInd.make kn2 kn2'))
     then ()
     else error NotEqualInductiveAliases
-  end;
-  (* we check that records and their field names are preserved. *)
-  (** FIXME: this check looks nonsense *)
-  check (fun mib -> mib.mind_record <> NotRecord) (==) (fun x -> RecordFieldExpected x);
-  if mib1.mind_record <> NotRecord then begin
-    let rec names_prod_letin t = match kind t with
-      | Prod(n,_,t) -> n.binder_name::(names_prod_letin t)
-      | LetIn(n,_,_,t) -> n.binder_name::(names_prod_letin t)
-      | Cast(t,_,_) -> names_prod_letin t
-      | _ -> []
-    in
-    assert (Int.equal (Array.length mib1.mind_packets) 1);
-    assert (Int.equal (Array.length mib2.mind_packets) 1);
-    assert (Int.equal (Array.length mib1.mind_packets.(0).mind_user_lc) 1);
-    assert (Int.equal (Array.length mib2.mind_packets.(0).mind_user_lc) 1);
-    check (fun mib ->
-      let nparamdecls = List.length mib.mind_params_ctxt in
-      let names = names_prod_letin (mib.mind_packets.(0).mind_user_lc.(0)) in
-      snd (List.chop nparamdecls names)) (List.equal Name.equal)
-      (fun x -> RecordProjectionsExpected x);
   end;
   (* we first check simple things *)
   let cst =
@@ -267,7 +267,7 @@ let check_constant (cst, ustate) trace env l info1 cb2 subst1 subst2 =
 let rec check_modules state trace env mp1 msb1 mp2 msb2 subst1 subst2 =
   let mty1 = module_type_of_module msb1 in
   let mty2 = module_type_of_module msb2 in
-  check_modtypes state trace env mp1 mty1 mp2 mty2 subst1 subst2 false
+  check_modtypes state trace env mp1 mty1 mp2 mty2 subst1 subst2
 
 and check_signatures (cst, ustate) trace env mp1 sig1 mp2 sig2 subst1 subst2 reso1 reso2 =
   let map1 = make_labmap mp1 sig1 in
@@ -295,56 +295,57 @@ and check_signatures (cst, ustate) trace env mp1 sig1 mp2 sig2 subst1 subst2 res
             in
             let mp1' = MPdot (mp1, l) in
             let mp2' = MPdot (mp2, l) in
-            let env = add_module mp2' (module_body_of_type mtb2) (add_module mp1' (module_body_of_type mtb1) env) in
-            check_modtypes (cst, ustate) (Submodule l :: trace) env mp1' mtb1 mp2' mtb2 subst1 subst2 true
+            (* Check for equivalence via subtyping in both directions *)
+            let cst =
+              let env = add_module mp1' (module_body_of_type mtb1) env in
+              check_modtypes (cst, ustate) (Submodule l :: trace) env mp1' mtb1 mp2' mtb2 subst1 subst2
+            in
+            let env = add_module mp2' (module_body_of_type mtb2) env in
+            check_modtypes (cst, ustate) (Submodule l :: trace) env mp2' mtb2 mp1' mtb1 subst2 subst1
   in
     List.fold_left check_one_body cst sig2
 
-and check_modtypes (cst, ustate) trace env mp1 mtb1 mp2 mtb2 subst1 subst2 equiv =
+and check_modtypes (cst, ustate) trace env mp1 mtb1 mp2 mtb2 subst1 subst2 =
   if mtb1==mtb2 || mod_type mtb1 == mod_type mtb2 then cst
   else
-    let rec check_structure cst ~nargs env struc1 struc2 equiv subst1 subst2 =
+    let rec check_structure cst ~nargs env struc1 struc2 subst1 subst2 =
       match struc1,struc2 with
       | NoFunctor list1,
         NoFunctor list2 ->
+        let env =
+          if Int.equal nargs 0 then
+            (* Not a functor, so the body and all its subcomponents should
+               already be in the environment *)
+            env
+          else
+            (* We only add the subcomponents, the functor per se is already
+               part of the environment but the subtyping check will never access
+               it directly *)
+            Modops.add_structure mp1 (subst_structure subst1 mp1 list1) (mod_delta mtb1) env
+        in
         let delta_mtb1 = mod_delta mtb1 in
         let delta_mtb2 = mod_delta mtb2 in
-        if equiv then
-          let subst2 = add_mp mp2 mp1 delta_mtb1 subst2 in
-          let cst = check_signatures (cst, ustate) trace env
-            mp1 list1 mp2 list2 subst1 subst2
-            delta_mtb1 delta_mtb2
-          in
-          let cst = check_signatures (cst, ustate) trace env
-            mp2 list2 mp1 list1 subst2 subst1
-            delta_mtb2 delta_mtb1
-          in
-          cst
-        else
-          check_signatures (cst, ustate) trace env
-            mp1 list1 mp2 list2 subst1 subst2
-            delta_mtb1 delta_mtb2
+        check_signatures (cst, ustate) trace env
+          mp1 list1 mp2 list2 subst1 subst2
+          delta_mtb1 delta_mtb2
       | MoreFunctor (arg_id1,arg_t1,body_t1),
         MoreFunctor (arg_id2,arg_t2,body_t2) ->
         let mparg1 = MPbound arg_id1 in
         let mparg2 = MPbound arg_id2 in
         let subst1 = join (map_mbid arg_id1 mparg2 (mod_delta arg_t2)) subst1 in
         let env = add_module_parameter arg_id2 arg_t2 env in
-        let cst = check_modtypes (cst, ustate) (FunctorArgument (nargs+1) :: trace) env mparg2 arg_t2 mparg1 arg_t1 subst2 subst1 equiv in
+        let cst = check_modtypes (cst, ustate) (FunctorArgument (nargs+1) :: trace) env mparg2 arg_t2 mparg1 arg_t1 subst2 subst1 in
         (* contravariant *)
-        let env =
-          if Modops.is_functor body_t1 then env
-          else
-            let mtb = make_module_type (subst_signature subst1 mp1 body_t1) (mod_delta mtb1) in
-            add_module mp1 (module_body_of_type mtb) env
-        in
-        check_structure cst ~nargs:(nargs + 1) env body_t1 body_t2 equiv subst1 subst2
+        check_structure cst ~nargs:(nargs + 1) env body_t1 body_t2 subst1 subst2
       | _ , _ -> error_incompatible_modtypes mtb1 mtb2
     in
-    check_structure cst ~nargs:0 env (mod_type mtb1) (mod_type mtb2) equiv subst1 subst2
+    check_structure cst ~nargs:0 env (mod_type mtb1) (mod_type mtb2) subst1 subst2
 
-let check_subtypes state env mp_sup sup mp_super super =
-  let env = add_module mp_sup (module_body_of_type sup) env in
+let check_subtypes state env mp_sup mp_super super =
+  let sup = match Environ.lookup_module mp_sup env with
+  | mb -> module_type_of_module mb
+  | exception Not_found -> assert false
+  in
   check_modtypes state [] env
     mp_sup (strengthen sup mp_sup) mp_super super empty_subst
-    (map_mp mp_super mp_sup (mod_delta sup)) false
+    (map_mp mp_super mp_sup (mod_delta sup))

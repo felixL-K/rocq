@@ -27,7 +27,8 @@ sort: [
 | "SProp"
 | "Type"
 | "Type" "@{" "_" "}"
-| "Type" "@{" test_sort_qvar reference "|" universe "}"
+| "Type" "@{" test_old_sort_qvar reference "|" universe "}"
+| "Type" "@{" test_sort_qvar reference ";" universe "}"
 | "Type" "@{" universe "}"
 ]
 
@@ -51,6 +52,7 @@ universe_name: [
 
 universe_expr: [
 | universe_name universe_increment
+| natural
 ]
 
 universe: [
@@ -73,10 +75,10 @@ term200: [
 ]
 
 term100: [
-| term99 "<:" term200
-| term99 "<<:" term200
-| term99 ":>" term200
-| term99 ":" term200
+| term100 "<:" term200
+| term100 "<<:" term200
+| term100 ":>" term200
+| term100 ":" term200
 | term99
 ]
 
@@ -89,7 +91,7 @@ term90: [
 ]
 
 term10: [
-| term9 LIST1 arg
+| term10 LIST1 arg
 | "@" global univ_annot LIST0 term9
 | "@" pattern_ident LIST1 identref
 | binder_constr
@@ -106,10 +108,10 @@ term8: [
 ]
 
 term1: [
-| term0 ".(" global univ_annot LIST0 arg ")"
-| term0 ".(" "@" global univ_annot LIST0 ( term9 ) ")"
-| term0 "%" IDENT
-| term0 "%_" IDENT
+| term1 ".(" global univ_annot LIST0 arg ")"
+| term1 ".(" "@" global univ_annot LIST0 ( term9 ) ")"
+| term1 "%" IDENT
+| term1 "%_" IDENT
 | term0
 ]
 
@@ -184,11 +186,12 @@ evar_instance: [
 ]
 
 univ_annot: [
-| "@{" LIST0 univ_level_or_quality OPT [ "|" LIST0 univ_level_or_quality ] "}"
+| "@{" LIST0 univ_level_or_quality OPT [ [ "|" | ";" ] LIST0 univ_level_or_quality ] "}"
 |
 ]
 
 univ_level_or_quality: [
+| NUMBER "0"
 | "Set"
 | "SProp"
 | "Prop"
@@ -258,7 +261,7 @@ pattern200: [
 ]
 
 pattern100: [
-| pattern99 ":" term200
+| pattern100 ":" term200
 | pattern99
 ]
 
@@ -271,15 +274,15 @@ pattern90: [
 ]
 
 pattern10: [
-| pattern1 "as" name
-| pattern1 LIST1 pattern1
+| pattern10 "as" name
+| pattern10 LIST1 pattern1
 | "@" Prim.reference LIST0 pattern1
 | pattern1
 ]
 
 pattern1: [
-| pattern0 "%" IDENT
-| pattern0 "%_" IDENT
+| pattern1 "%" IDENT
+| pattern1 "%_" IDENT
 | pattern0
 ]
 
@@ -530,6 +533,8 @@ command: [
 | "Create" "HintDb" IDENT; [ "discriminated" | ]
 | "Remove" "Hints" LIST1 global opt_hintbases
 | "Hint" hint opt_hintbases
+| "Optimize" "Proof"
+| "Optimize" "Heap"
 | "Comments" LIST0 comment
 | "Attributes" attribute_list
 | "Declare" "Instance" ident_decl binders ":" term200 hint_info
@@ -563,7 +568,7 @@ command: [
 | "Debug" "On"
 | "Debug" "Off"
 | "Declare" "Reduction" IDENT; ":=" red_expr
-| "Declare" "Custom" "Entry" IDENT
+| "Declare" "Custom" "Entry" ident
 | "Obligation" natural "of" identref withtac
 | "Obligation" natural withtac
 | "Next" "Obligation" "of" identref withtac
@@ -618,6 +623,7 @@ command: [
 | "Hint" "Rewrite" orient LIST1 constr "using" generic_tactic ":" LIST1 preident
 | "Hint" "Rewrite" orient LIST1 constr
 | "Hint" "Rewrite" orient LIST1 constr "using" generic_tactic
+| "Create" "Rewrite" "HintDb" ident
 | "Derive" "Inversion_clear" identref "with" constr "Sort" sort_quality_or_set
 | "Derive" "Inversion_clear" identref "with" constr
 | "Derive" "Inversion" identref "with" constr "Sort" sort_quality_or_set
@@ -629,8 +635,6 @@ command: [
 | "Unshelve"
 | "Declare" "Equivalent" "Keys" constr constr
 | "Print" "Equivalent" "Keys"
-| "Optimize" "Proof"
-| "Optimize" "Heap"
 | "infoH" tactic
 | "Hint" "Cut" "[" hints_path "]" opthints
 | "Typeclasses" "Transparent" LIST1 reference
@@ -694,9 +698,11 @@ command: [
 | "Number" "Notation" reference reference reference OPT number_options ":" preident
 | "String" "Notation" reference reference reference OPT string_option ":" preident
 | "Ltac2" ltac2_entry      (* ltac2 plugin *)
+| "Ltac2" "Custom" "Entry" identref      (* ltac2 plugin *)
 | "Ltac2" "Notation" ltac2def_syn      (* ltac2 plugin *)
+| "Ltac2" "Abbreviation" ltac2abbrev_syn      (* ltac2 plugin *)
 | "Ltac2" "Eval" ltac2_expr6      (* ltac2 plugin *)
-| "Print" "Ltac2" reference      (* ltac2 plugin *)
+| "Print" test_ltac2_ident "Ltac2" reference      (* ltac2 plugin *)
 | "Print" "Ltac2" "Type" reference      (* ltac2 plugin *)
 | "Locate" "Ltac2" reference      (* ltac2 plugin *)
 | "Print" "Ltac2" "Signatures"      (* ltac2 plugin *)
@@ -804,14 +810,17 @@ red_expr: [
 ]
 
 vernac_control: [
-| "Time" vernac_control
-| "Instructions" vernac_control
-| "Profile" OPT STRING vernac_control
-| "Redirect" ne_string vernac_control
-| "Timeout" natural vernac_control
-| "Fail" vernac_control
-| "Succeed" vernac_control
-| decorated_vernac
+| LIST0 control_flag decorated_vernac
+]
+
+control_flag: [
+| "Time"
+| "Instructions"
+| "Profile" OPT STRING
+| "Redirect" ne_string
+| "Timeout" natural
+| "Fail"
+| "Succeed"
 ]
 
 decorated_vernac: [
@@ -954,7 +963,8 @@ univ_decl_constraints: [
 ]
 
 univ_decl: [
-| "@{" test_univ_decl LIST0 identref "|" LIST0 identref [ "+" | ] univ_decl_constraints
+| "@{" test_doublepipe_univ_decl LIST0 identref "|" LIST0 identref [ "+" | ] univ_decl_constraints
+| "@{" LIST0 identref ";" LIST0 identref [ "+" | ] univ_decl_constraints
 | "@{" LIST0 identref [ "+" | ] univ_decl_constraints
 ]
 
@@ -970,7 +980,8 @@ variance_identref: [
 ]
 
 cumul_univ_decl: [
-| "@{" test_cumul_univ_decl LIST0 identref "|" LIST0 variance_identref [ "+" | ] univ_decl_constraints
+| "@{" test_doublepipe_cumul_univ_decl LIST0 identref "|" LIST0 variance_identref [ "+" | ] univ_decl_constraints
+| "@{" test_semicolon_cumul_univ_decl LIST0 identref ";" LIST0 variance_identref [ "+" | ] univ_decl_constraints
 | "@{" LIST0 variance_identref [ "+" | ] univ_decl_constraints
 ]
 
@@ -1280,8 +1291,8 @@ ssexpr35: [
 ]
 
 ssexpr50: [
-| ssexpr0 "-" ssexpr0
-| ssexpr0 "+" ssexpr0
+| ssexpr50 "-" ssexpr0
+| ssexpr50 "+" ssexpr0
 | ssexpr0
 ]
 
@@ -1387,12 +1398,12 @@ printable: [
 | "All"
 | "Section" global
 | "Grammar" LIST0 IDENT
-| "Custom" "Grammar" IDENT
+| "Custom" "Grammar" qualid
 | "Keywords"
 | "LoadPath" OPT dirpath
 | "Libraries"
 | "Notation" string
-| "Notation" string "in" "custom" IDENT
+| "Notation" string "in" "custom" qualid
 | "ML" "Path"
 | "ML" "Modules"
 | "Debug" "GC"
@@ -1545,11 +1556,16 @@ syntax: [
 | "Undelimit" "Scope" IDENT
 | "Bind" "Scope" IDENT; "with" LIST1 coercion_class
 | "Infix" notation_declaration
-| "Notation" identref LIST0 ident ":=" constr syntax_modifiers
-| "Notation" notation_declaration
+| located_notation identref LIST0 ident ":=" constr syntax_modifiers
+| "Abbreviation" identref LIST0 ident ":=" constr syntax_modifiers
+| located_notation notation_declaration
 | "Reserved" "Infix" ne_lstring syntax_modifiers
 | "Reserved" "Notation" ne_lstring syntax_modifiers
 | enable_enable_disable "Notation" enable_notation_rule enable_notation_interpretation enable_notation_flags opt_scope
+]
+
+located_notation: [
+| "Notation"
 ]
 
 enable_enable_disable: [
@@ -1577,7 +1593,7 @@ enable_notation_flag: [
 | "all"
 | "only" "parsing"
 | "only" "printing"
-| "in" "custom" identref
+| "in" "custom" qualid
 | "in" "constr"
 ]
 
@@ -1594,8 +1610,8 @@ level: [
 
 syntax_modifier: [
 | "at" "level" natural
-| "in" "custom" IDENT
-| "in" "custom" IDENT; "at" "level" natural
+| "in" "custom" qualid
+| "in" "custom" qualid "at" "level" natural
 | "left" "associativity"
 | "right" "associativity"
 | "no" "associativity"
@@ -1627,7 +1643,7 @@ explicit_subentry: [
 | "strict" "pattern"
 | "strict" "pattern" "at" "level" natural
 | "closed" "binder"
-| "custom" IDENT at_level_opt OPT binder_interp
+| "custom" qualid at_level_opt OPT binder_interp
 ]
 
 at_level_opt: [
@@ -1784,8 +1800,6 @@ simple_tactic: [
 | "generalize_eqs_vars" hyp
 | "dependent" "generalize_eqs_vars" hyp
 | "specialize_eqs" hyp
-| "destauto"
-| "destauto" "in" hyp
 | "transparent_abstract" tactic3
 | "transparent_abstract" tactic3 "using" ident
 | "constr_eq" constr constr
@@ -1836,7 +1850,6 @@ simple_tactic: [
 | "typeclasses" "eauto" "dfs" OPT nat_or_var
 | "typeclasses" "eauto" "best_effort" OPT nat_or_var
 | "typeclasses" "eauto" OPT nat_or_var
-| "head_of_constr" ident constr
 | "not_evar" constr
 | "is_ground" constr
 | "autoapply" constr "with" preident
@@ -2148,8 +2161,8 @@ ltac_expr5: [
 ]
 
 ltac_expr4: [
-| ltac_expr3 ";" ltac_expr3
-| ltac_expr3 ";" tactic_then_locality for_each_goal "]"
+| ltac_expr4 ";" ltac_expr3
+| ltac_expr4 ";" tactic_then_locality for_each_goal "]"
 | ltac_expr3
 ]
 
@@ -2169,9 +2182,9 @@ ltac_expr3: [
 ]
 
 ltac_expr2: [
-| ltac_expr1 "+" ltac_expr2
+| ltac_expr2 "+" ltac_expr2
 | "tryif" ltac_expr5 "then" ltac_expr5 "else" ltac_expr2
-| ltac_expr1 "||" ltac_expr2
+| ltac_expr2 "||" ltac_expr2
 | ltac_expr1
 ]
 
@@ -2305,7 +2318,7 @@ tactic_mode: [
 | subprf
 | OPT toplevel_selector subprf_with_selector
 | OPT ltac_selector OPT ltac_info tactic ltac_use_default
-| "par" ":" OPT ltac_info tactic ltac_use_default
+| "par" ":" OPT ltac_info tactic "."
 ]
 
 ltac_selector: [
@@ -2656,12 +2669,20 @@ string_option: [
 | "(" number_string_via ")"
 ]
 
+tac2pat3: [
+| tac2pat3 "|" LIST1 tac2pat2 SEP "|"      (* ltac2 plugin *)
+| tac2pat3 "as" identref      (* ltac2 plugin *)
+| tac2pat2      (* ltac2 plugin *)
+]
+
+tac2pat2: [
+| tac2pat2 "::" tac2pat2      (* ltac2 plugin *)
+| tac2pat1      (* ltac2 plugin *)
+]
+
 tac2pat1: [
 | Prim.qualid LIST1 tac2pat0      (* ltac2 plugin *)
 | Prim.qualid      (* ltac2 plugin *)
-| tac2pat0 "::" tac2pat0      (* ltac2 plugin *)
-| tac2pat0 "|" LIST1 tac2pat1 SEP "|"      (* ltac2 plugin *)
-| tac2pat0 "as" identref      (* ltac2 plugin *)
 | tac2pat0      (* ltac2 plugin *)
 ]
 
@@ -2673,18 +2694,18 @@ tac2pat0: [
 | Prim.qualid      (* ltac2 plugin *)
 | "(" atomic_tac2pat ")"      (* ltac2 plugin *)
 | "{" tac2rec_fieldpats "}"      (* ltac2 plugin *)
-| "[" LIST0 tac2pat1 SEP ";" "]"      (* ltac2 plugin *)
+| "[" LIST0 tac2pat3 SEP ";" "]"      (* ltac2 plugin *)
 ]
 
 atomic_tac2pat: [
 |      (* ltac2 plugin *)
-| tac2pat1 ":" ltac2_type5      (* ltac2 plugin *)
-| tac2pat1 "," LIST0 tac2pat1 SEP ","      (* ltac2 plugin *)
-| tac2pat1      (* ltac2 plugin *)
+| tac2pat3 ":" ltac2_type5      (* ltac2 plugin *)
+| tac2pat3 "," LIST0 tac2pat3 SEP ","      (* ltac2 plugin *)
+| tac2pat3      (* ltac2 plugin *)
 ]
 
 ltac2_expr6: [
-| ltac2_expr5 ";" ltac2_expr6      (* ltac2 plugin *)
+| ltac2_expr6 ";" ltac2_expr6      (* ltac2 plugin *)
 | ltac2_expr5      (* ltac2 plugin *)
 ]
 
@@ -2701,19 +2722,19 @@ ltac2_expr4: [
 ]
 
 ltac2_expr3: [
-| ltac2_expr2 "," LIST1 ltac2_expr2 SEP ","      (* ltac2 plugin *)
+| ltac2_expr3 "," LIST1 ltac2_expr2 SEP ","      (* ltac2 plugin *)
 | ltac2_expr2      (* ltac2 plugin *)
 ]
 
 ltac2_expr2: [
-| ltac2_expr1 "::" ltac2_expr2      (* ltac2 plugin *)
+| ltac2_expr2 "::" ltac2_expr2      (* ltac2 plugin *)
 | ltac2_expr1      (* ltac2 plugin *)
 ]
 
 ltac2_expr1: [
-| ltac2_expr0 LIST1 ltac2_expr0      (* ltac2 plugin *)
-| ltac2_expr0 ".(" Prim.qualid ")"      (* ltac2 plugin *)
-| ltac2_expr0 ".(" Prim.qualid ")" ":=" ltac2_expr5      (* ltac2 plugin *)
+| ltac2_expr1 LIST1 ltac2_expr0      (* ltac2 plugin *)
+| ltac2_expr1 ".(" Prim.qualid ")"      (* ltac2 plugin *)
+| ltac2_expr1 ".(" Prim.qualid ")" ":=" ltac2_expr5      (* ltac2 plugin *)
 | ltac2_expr0      (* ltac2 plugin *)
 ]
 
@@ -2797,17 +2818,17 @@ let_binder: [
 ]
 
 ltac2_type5: [
-| ltac2_type2 "->" ltac2_type5      (* ltac2 plugin *)
+| ltac2_type5 "->" ltac2_type5      (* ltac2 plugin *)
 | ltac2_type2      (* ltac2 plugin *)
 ]
 
 ltac2_type2: [
-| ltac2_type1 "*" LIST1 ltac2_type1 SEP "*"      (* ltac2 plugin *)
+| ltac2_type2 "*" LIST1 ltac2_type1 SEP "*"      (* ltac2 plugin *)
 | ltac2_type1      (* ltac2 plugin *)
 ]
 
 ltac2_type1: [
-| ltac2_type0 Prim.qualid      (* ltac2 plugin *)
+| ltac2_type1 Prim.qualid      (* ltac2 plugin *)
 | ltac2_type0      (* ltac2 plugin *)
 ]
 
@@ -2886,7 +2907,7 @@ tac2rec_fieldpats: [
 ]
 
 tac2rec_fieldpat: [
-| Prim.qualid OPT [ ":=" tac2pat1 ]      (* ltac2 plugin *)
+| Prim.qualid OPT [ ":=" tac2pat3 ]      (* ltac2 plugin *)
 ]
 
 tac2typ_prm: [
@@ -2915,7 +2936,7 @@ tac2def_ext: [
 
 syn_node: [
 | "_"      (* ltac2 plugin *)
-| Prim.ident      (* ltac2 plugin *)
+| qualid      (* ltac2 plugin *)
 ]
 
 ltac2_syntax_class: [
@@ -2928,10 +2949,15 @@ ltac2_syntax_class: [
 syn_level: [
 |      (* ltac2 plugin *)
 | ":" Prim.natural      (* ltac2 plugin *)
+| ":" qualid OPT [ "(" Prim.natural ")" ]      (* ltac2 plugin *)
 ]
 
 tac2def_syn: [
 | LIST1 ltac2_syntax_class syn_level ":=" ltac2_expr6      (* ltac2 plugin *)
+]
+
+tac2abbrev_syn: [
+| Prim.identref ":=" ltac2_expr6      (* ltac2 plugin *)
 ]
 
 globref: [
@@ -3015,8 +3041,8 @@ G_LTAC2_simple_intropattern: [
 ]
 
 G_LTAC2_simple_intropattern_closed: [
-| G_LTAC2_or_and_intropattern      (* ltac2 plugin *)
 | G_LTAC2_equality_intropattern      (* ltac2 plugin *)
+| G_LTAC2_or_and_intropattern      (* ltac2 plugin *)
 | "_"      (* ltac2 plugin *)
 | G_LTAC2_naming_intropattern      (* ltac2 plugin *)
 ]
@@ -3248,8 +3274,7 @@ gmatch_rule: [
 ]
 
 goal_match_list: [
-| LIST1 gmatch_rule SEP "|"      (* ltac2 plugin *)
-| "|" LIST1 gmatch_rule SEP "|"      (* ltac2 plugin *)
+| OPT "|" LIST1 gmatch_rule SEP "|"      (* ltac2 plugin *)
 ]
 
 q_goal_matching: [
@@ -3312,6 +3337,10 @@ ltac2def_syn: [
 | tac2def_syn      (* ltac2 plugin *)
 ]
 
+ltac2abbrev_syn: [
+| tac2abbrev_syn      (* ltac2 plugin *)
+]
+
 ltac2_expr: [
 | _ltac2_expr      (* ltac2 plugin *)
 ]
@@ -3327,9 +3356,13 @@ ltac2_use_default: [
 
 tac2mode: [
 | OPT ltac2_selector ltac2_expr6 ltac2_use_default      (* ltac2 plugin *)
-| "par" ":" ltac2_expr6 ltac2_use_default      (* ltac2 plugin *)
+| "par" ":" ltac2_expr6 "."      (* ltac2 plugin *)
 | subprf      (* ltac2 plugin *)
 | OPT toplevel_selector subprf_with_selector      (* ltac2 plugin *)
+]
+
+test_ltac2_ident: [
+| test_ltac2_ident_aux      (* ltac2 plugin *)
 ]
 
 ltac1_expr_in_env: [

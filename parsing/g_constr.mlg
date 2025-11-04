@@ -80,11 +80,21 @@ let test_array_closing =
     lk_kw "|" >> lk_kw "]" >> check_no_space
   end
 
+let test_old_sort_qvar =
+  let open Procq.Lookahead in
+  to_entry "test_old_sort_qvar" begin
+    lk_ident >> lk_list lk_field >> lk_kw "|"
+  end
+
 let test_sort_qvar =
   let open Procq.Lookahead in
   to_entry "test_sort_qvar" begin
-    lk_ident >> lk_list lk_field >> lk_kw "|"
+    lk_ident >> lk_list lk_field >> lk_kw ";"
   end
+
+let warn_old_sort_syntax =
+  CWarnings.create ~name:"deprecated-sort-poly-syntax" ~category:Deprecation.Version.v9_1
+    Pp.(fun () -> fmt "Separating sorts from universes with \"|\" is deprecated.@ Use \";\" instead.")
 
 type univ_level_or_quality =
   | SProp | Prop | Set | Type | Anon of Loc.t | Global of Libnames.qualid
@@ -139,8 +149,13 @@ GRAMMAR EXTEND Gram
       | "SProp" -> { None, UNamed [CSProp, 0] }
       | "Type" -> { None, UAnonymous {rigid=UnivRigid} }
       | "Type"; "@{"; "_"; "}" -> { None, UAnonymous {rigid=UnivFlexible false} }
-      | "Type"; "@{"; test_sort_qvar; q = reference; "|"; u = universe; "}" ->
-        { Some (CQVar q), u }
+      | "Type"; "@{"; test_old_sort_qvar; q = reference; pipe_loc = [ "|" -> { loc } ]; u = universe; "}" -> {
+          warn_old_sort_syntax ~loc:pipe_loc ();
+          Some (CQVar q), u
+        }
+      | "Type"; "@{"; test_sort_qvar; q = reference; ";"; u = universe; "}" -> {
+          Some (CQVar q), u
+        }
       | "Type"; "@{"; u = universe; "}" -> { None, u } ] ]
   ;
   sort_quality_or_set:
@@ -159,7 +174,8 @@ GRAMMAR EXTEND Gram
       | "Prop" -> { CProp } ] ]
   ;
   universe_expr:
-    [ [ id = universe_name; n = universe_increment -> { (id,n) } ] ]
+    [ [ id = universe_name; n = universe_increment -> { (id,n) }
+      | n = natural -> { CSet, n } ] ]
   ;
   universe:
     [ [ IDENT "max"; "("; ids = LIST1 universe_expr SEP ","; ")" -> { UNamed ids }
@@ -240,7 +256,7 @@ GRAMMAR EXTEND Gram
     [ [ fs = fields_def -> { CAst.make ~loc @@ CRecord fs } ] ]
   ;
   fields_def:
-    [ [ f = field_def; ";"; fs = fields_def -> { f :: fs }
+    [ RIGHTA [ f = field_def; ";"; fs = fields_def -> { f :: fs }
       | f = field_def -> { [f] }
       | -> { [] } ] ]
   ;
@@ -312,18 +328,21 @@ GRAMMAR EXTEND Gram
       | -> { [] } ] ]
   ;
   univ_annot:
-    [ [ "@{"; l = LIST0 univ_level_or_quality; l' = OPT [ "|"; l' = LIST0 univ_level_or_quality -> { l' } ]; "}" ->
+    [ [ "@{"; l = LIST0 univ_level_or_quality; l' = OPT [ is_pipe = [ "|" -> { Some loc } | ";" -> { None } ]; l' = LIST0 univ_level_or_quality -> { is_pipe, l' } ]; "}" ->
         {
           let l, l' = match l' with
             | None -> [], List.map (force_univ_level ~loc) l
-            | Some l' -> List.map (force_quality ~loc) l, List.map (force_univ_level ~loc) l'
+            | Some (is_pipe, l') ->
+              let () = Option.iter (fun loc -> warn_old_sort_syntax ~loc ()) is_pipe in
+              List.map (force_quality ~loc) l, List.map (force_univ_level ~loc) l'
           in
           Some (l,l')
         }
       | -> { None } ] ]
   ;
   univ_level_or_quality:
-    [ [ "Set" -> { Set }
+    [ [ NUMBER "0" -> { Set }
+      | "Set" -> { Set }
       | "SProp" -> { SProp }
       | "Prop" -> { Prop }
       | "Type" -> { Type }
@@ -384,7 +403,7 @@ GRAMMAR EXTEND Gram
     [ [ id = global; ":="; pat = pattern LEVEL "200" -> { (id, pat) } ] ]
   ;
   record_patterns:
-    [ [ p = record_pattern; ";"; ps = record_patterns -> { p :: ps }
+    [ RIGHTA [ p = record_pattern; ";"; ps = record_patterns -> { p :: ps }
       | p = record_pattern-> { [p] }
       | -> { [] } ] ]
   ;
@@ -429,7 +448,7 @@ GRAMMAR EXTEND Gram
         { CAst.make ~loc @@ CMeasureRec (id,m,rel) } ] ]
   ;
   binders_fixannot:
-    [ [ ensure_fixannot; f = fixannot -> { [], Some f }
+    [ RIGHTA [ ensure_fixannot; f = fixannot -> { [], Some f }
       | b = binder; bl = binders_fixannot -> { b @ fst bl, snd bl }
       | -> { [], None } ] ]
   ;

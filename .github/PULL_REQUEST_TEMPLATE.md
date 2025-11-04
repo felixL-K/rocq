@@ -21,16 +21,22 @@ Fixes / closes #????
 <!-- If this breaks external libraries or plugins in CI: -->
 - [ ] Opened **overlay** pull requests.
 
+<!--
+# Turn this off if you don't want coq-bot suggestions to run the minimizer
+# (you can always call the minimizer with @coqbot minimize anyway)
+offer-minimizer: on
+-->
+
 <!-- Pointers to relevant developer documentation:
 
-Contributing guide: https://github.com/coq/coq/blob/master/CONTRIBUTING.md
+Contributing guide: https://github.com/rocq-prover/rocq/blob/master/CONTRIBUTING.md
 
-Test-suite: https://github.com/coq/coq/blob/master/test-suite/README.md
+Test-suite: https://github.com/rocq-prover/rocq/blob/master/test-suite/README.md
 
-Changelog: https://github.com/coq/coq/blob/master/doc/changelog/README.md
+Changelog: https://github.com/rocq-prover/rocq/blob/master/doc/changelog/README.md
 
-Building the doc: https://github.com/coq/coq/blob/master/doc/README.md
-Sphinx: https://github.com/coq/coq/blob/master/doc/sphinx/README.rst
-doc_gram: https://github.com/coq/coq/blob/master/doc/tools/docgram/README.md
+Building the doc: https://github.com/rocq-prover/rocq/blob/master/doc/README.md
+Sphinx: https://github.com/rocq-prover/rocq/blob/master/doc/sphinx/README.rst
+doc_gram: https://github.com/rocq-prover/rocq/blob/master/doc/tools/docgram/README.md
 
-Overlays: https://github.com/coq/coq/blob/master/dev/ci/user-overlays/README.md
+Overlays: https://github.com/rocq-prover/rocq/blob/master/dev/ci/user-overlays/README.md

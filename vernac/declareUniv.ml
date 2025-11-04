@@ -95,7 +95,7 @@ let invent_name prefix (named,cnt) u =
   aux cnt
 
 let check_exists_sort sp =
-  if Nametab.exists_sort sp then
+  if Nametab.Quality.exists sp then
     raise (AlreadyDeclared (Some "Sort", Libnames.basename sp))
   else ()
 
@@ -105,7 +105,7 @@ let qualify_sort i dp id =
 let do_sort_name ~check i dp (id,quality) =
   let i, sp = qualify_sort i dp id in
   if check then check_exists_sort sp;
-  Nametab.push_sort i sp quality
+  Nametab.Quality.push i sp quality
 
 let cache_sort_names (prefix, decl) =
   let depth = Lib.sections_depth () in
@@ -139,8 +139,8 @@ let input_sort_names (src, l) =
 
 
 let label_of = let open GlobRef in function
-| ConstRef c -> Label.to_id @@ Constant.label c
-| IndRef (c,_) -> Label.to_id @@ MutInd.label c
+| ConstRef c -> Constant.label c
+| IndRef (c,_) -> MutInd.label c
 | VarRef id -> id
 | ConstructRef _ ->
   CErrors.anomaly ~label:"declare_univ_binders"
@@ -229,7 +229,7 @@ let do_sort ~poly l =
     let qs = List.fold_left  (fun qs (_, qv) -> Sorts.QVar.(Set.add (make_global qv) qs))
       Sorts.QVar.Set.empty l
     in
-    Global.push_quality_set qs
+    Global.push_qualities qs
   | true ->
     let names = CArray.map_of_list (fun (na,_) -> Name na) l in
     let qs = CArray.map_of_list (fun (_,sg) -> Sorts.Quality.global sg) l in

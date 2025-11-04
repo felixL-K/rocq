@@ -74,7 +74,7 @@ struct
     | DArray
 
   let compare_ci ci1 ci2 =
-    let c = Label.compare (MutInd.label @@ fst ci1.ci_ind) (MutInd.label @@ fst ci2.ci_ind) in
+    let c = Id.compare (MutInd.label @@ fst ci1.ci_ind) (MutInd.label @@ fst ci2.ci_ind) in
     if c = 0 then
       let c = Int.compare ci1.ci_npar ci2.ci_npar in
       if c = 0 then
@@ -314,13 +314,13 @@ end
 
 type rewrite_db = {
   rdb_hintdn : HintDN.t;
-  rdb_order : int KNmap.t;
+  rdb_order : int KerName.Map.t;
   rdb_maxuid : int;
 }
 
 let empty_rewrite_db = {
   rdb_hintdn = HintDN.empty;
-  rdb_order = KNmap.empty;
+  rdb_order = KerName.Map.empty;
   rdb_maxuid = 0;
 }
 
@@ -338,13 +338,13 @@ let find_base bas =
 
 let find_rewrites bas =
   let db = find_base bas in
-  let sort r1 r2 = Int.compare (KNmap.find r2.rew_id db.rdb_order) (KNmap.find r1.rew_id db.rdb_order) in
+  let sort r1 r2 = Int.compare (KerName.Map.find r2.rew_id db.rdb_order) (KerName.Map.find r1.rew_id db.rdb_order) in
   List.sort sort (HintDN.find_all db.rdb_hintdn)
 
 let find_matches env bas pat =
   let base = find_base bas in
   let res = HintDN.search_pattern env base.rdb_hintdn pat in
-  let sort r1 r2 = Int.compare (KNmap.find r2.rew_id base.rdb_order) (KNmap.find r1.rew_id base.rdb_order) in
+  let sort r1 r2 = Int.compare (KerName.Map.find r2.rew_id base.rdb_order) (KerName.Map.find r1.rew_id base.rdb_order) in
   List.sort sort res
 
 let print_rewrite_hintdb bas =
@@ -449,7 +449,7 @@ let fresh_key =
     let lbl = Id.of_string_soft (Printf.sprintf "%s#%i"
       (ModPath.to_string mp) cur)
     in
-    KerName.make mp (Label.of_id lbl)
+    KerName.make mp lbl
 
 let auto_multi_rewrite_with ?(conds=Naive) tac_main lbas cl =
   let onconcl = match cl.Locus.concl_occs with NoOccurrences -> false | _ -> true in
@@ -464,12 +464,47 @@ let auto_multi_rewrite_with ?(conds=Naive) tac_main lbas cl =
       Tacticals.tclZEROMSG ~info
         (strbrk "autorewrite .. in .. using can only be used either with a unique hypothesis or on the conclusion.")
 
+type db_obj = {
+  db_local : bool;
+  db_name : string;
+}
+
+let warn_create_hintdb =
+  CWarnings.create ~name:"already-declared-rewrite-hint-db" ~category:CWarnings.CoreCategories.automation
+    Pp.(fun db -> str "Rewrite hint database " ++ str db.db_name ++ str " already exists.")
+
+let warn_implicit_create_hint_db =
+  CWarnings.create ~name:"implicit-create-rewrite-hint-db" ~category:Deprecation.Version.v9_2
+    (fun db -> strbrk "Implicitly declaring Rewrite hint databases is deprecated. Please explicitly create " ++ quote (str db))
+
+let cache_db db = match String.Map.find_opt db.db_name !rewtab with
+| None ->
+  rewtab := String.Map.add db.db_name empty_rewrite_db !rewtab
+| Some _ -> warn_create_hintdb db
+
+let load_db _ x = cache_db x
+
+let classify_db db =
+  if db.db_local then Libobject.Dispose else Libobject.Substitute
+
+let inDB : db_obj -> Libobject.obj =
+  let open Libobject in
+  declare_object {(default_object "AUTOREWRITE_DB") with
+    cache_function = cache_db;
+    load_function = load_db;
+    subst_function = (fun (_, x) -> x);
+    classify_function = classify_db; }
+
+let create_rewrite_hint_db ~local ~name =
+  let hint = { db_local = local; db_name = name } in
+  Lib.add_leaf (inDB hint)
+
 (* Functions necessary to the library object declaration *)
 let cache_hintrewrite (rbase,lrl) =
   let base = try raw_find_base rbase with Not_found -> empty_rewrite_db in
   let fold accu r = {
     rdb_hintdn = HintDN.add (Global.env ()) r.rew_pat r accu.rdb_hintdn;
-    rdb_order = KNmap.add r.rew_id accu.rdb_maxuid accu.rdb_order;
+    rdb_order = KerName.Map.add r.rew_id accu.rdb_maxuid accu.rdb_order;
     rdb_maxuid = accu.rdb_maxuid + 1;
   } in
   let base = List.fold_left fold base lrl in
@@ -495,7 +530,7 @@ let subst_hintrewrite (subst,(rbase,list as node)) =
 (* Declaration of the Hint Rewrite library object *)
 let inHintRewrite : Libobject.locality * (string * rew_rule list) -> Libobject.obj =
   let open Libobject in
-  declare_object @@ object_with_locality "HINT_REWRITE_GLOBAL"
+  declare_object @@ object_with_locality ~cat:Hints.hint_cat "HINT_REWRITE_GLOBAL"
     ~cache:cache_hintrewrite
     ~subst:(Some subst_hintrewrite)
     ~discharge:(fun _ -> assert false)
@@ -557,7 +592,12 @@ let add_rew_rules ~locality base (lrul:raw_rew_rule list) =
   let lrul = List.map map lrul in
   Lib.add_leaf (inHintRewrite (locality,(base,lrul)))
 
+
+let check_declared db =
+  if not (String.Map.mem db !rewtab) then warn_implicit_create_hint_db db
+
 let add_rewrite_hint ~locality ~poly bases ort t lcsr =
+  let () = List.iter check_declared bases in
   let env = Global.env() in
   let sigma = Evd.from_env env in
   let f ce =

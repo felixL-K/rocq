@@ -26,6 +26,54 @@ open Constrintern
 open Libnames
 open Notation
 open Nameops
+open Globnames
+
+(** Intern custom entry names (with compat layer) *)
+
+exception UnknownCustomEntry of qualid
+
+let () = CErrors.register_handler @@ function
+  | UnknownCustomEntry entry -> Some Pp.(str "Unknown custom entry: " ++ pr_qualid entry ++ str ".")
+  | _ -> None
+
+let compat_custom_names = Summary.ref ~stage:Synterp ~name:"compat-custom-names" Id.Map.empty
+
+let add_custom_compat kn =
+  let id = CustomName.label kn in
+  compat_custom_names :=
+    Id.Map.update id (fun existing -> Some (kn :: Option.default [] existing))
+      !compat_custom_names
+
+let warn_compat_custom = CWarnings.create ~name:"deprecated-unqualified-custom-entry"
+    ~category:Deprecation.Version.v9_2
+    ~quickfix:(fun ~loc custom -> [Quickfix.make ~loc (Nametab.CustomEntries.pr custom)])
+    Pp.(fun custom ->
+        str "Accessing custom entry " ++ Nametab.CustomEntries.pr custom ++
+        str " by its unqualified name is deprecated.")
+
+let intern_custom_name qid =
+  match Nametab.CustomEntries.locate qid with
+  | v -> v
+  | exception Not_found ->
+    let compat =
+      if qualid_is_ident qid then
+        Id.Map.find_opt (qualid_basename qid) !compat_custom_names
+      else None
+    in
+    match compat with
+    | None -> Loc.raise ?loc:qid.loc (UnknownCustomEntry qid)
+    | Some [] -> assert false
+    | Some [custom] ->
+      warn_compat_custom ?loc:qid.loc custom;
+      custom
+    | Some customs ->
+      user_err ?loc:qid.loc
+        Pp.(pr_qualid qid ++ str " is ambiguous: it may refer to any of "
+            ++ pr_choice Nametab.CustomEntries.pr customs ++ str ".")
+
+let intern_notation_entry = function
+  | InConstrEntry -> InConstrEntry
+  | InCustomEntry qid -> InCustomEntry (intern_custom_name qid)
 
 (** **************************************************************** **)
 (** Printing grammar entries                                         **)
@@ -40,17 +88,6 @@ let pr_entry e =
 
 let error_unknown_entry ?loc name =
   user_err ?loc Pp.(str "Unknown or unprintable grammar entry " ++ str name ++ str".")
-
-let pr_registered_grammar name =
-  let gram = Procq.find_grammars_by_name name in
-  match gram with
-  | [] -> error_unknown_entry name
-  | entries ->
-    let pr_one (Procq.Entry.Any e) =
-      str "Entry " ++ str (Procq.Entry.name e) ++ str " is" ++ fnl () ++
-      pr_entry e
-    in
-    prlist pr_one entries
 
 let pr_grammar_subset grammar =
   let pp = String.Map.mapi (fun name l -> match l with
@@ -133,7 +170,12 @@ let pr_grammar = function
     in
     pr_grammar_subset grammar
 
-let pr_custom_grammar name = pr_registered_grammar ("custom:"^name)
+let pr_custom_grammar name =
+  let name = intern_custom_name name in
+  let constr_entry, _ = Egramrocq.find_custom_entry name in
+  pr_grammar_subset
+    (String.Map.singleton (Procq.Entry.name constr_entry)
+       [Procq.Entry.Any constr_entry])
 
 let pr_keywords () =
   Pp.prlist_with_sep Pp.fnl Pp.str (CString.Set.elements (CLexer.keywords (Procq.get_keyword_state())))
@@ -307,7 +349,7 @@ let error_not_same_scope x y =
 
 let pr_notation_entry = function
   | InConstrEntry -> str "constr"
-  | InCustomEntry s -> str "custom " ++ str s
+  | InCustomEntry s -> str "custom " ++ Nametab.CustomEntries.pr s
 
 let side = function
   | BorderProd (b,_) -> Some b
@@ -811,10 +853,10 @@ let pr_arg_level from (lev,typ) =
   | LevelLe n -> spc () ++ str "at level " ++ int n
   | LevelLt n -> spc () ++ str "at level below " ++ int n
   | LevelSome -> mt () in
-  Ppvernac.pr_set_entry_type (fun _ -> (*TO CHECK*) mt()) typ ++ pplev lev
+  Ppvernac.pr_set_entry_type Nametab.CustomEntries.pr (fun _ -> (*TO CHECK*) mt()) typ ++ pplev lev
 
-let pr_level ntn ({notation_entry = from; notation_level = fromlevel}, args) typs =
-  (match from with InConstrEntry -> mt () | InCustomEntry s -> str "in " ++ str s ++ spc()) ++
+let pr_level ({notation_entry = from; notation_level = fromlevel}, args) typs =
+  (match from with InConstrEntry -> mt () | InCustomEntry s -> str "in " ++ Nametab.CustomEntries.pr s ++ spc()) ++
   str "at level " ++ int fromlevel ++
   (match args with | [] -> mt () | _ :: _ ->
      spc () ++ str "with arguments" ++ spc()
@@ -823,17 +865,17 @@ let pr_level ntn ({notation_entry = from; notation_level = fromlevel}, args) typ
 let error_incompatible_level ntn oldprec oldtyps prec typs =
   user_err
     (str "Notation " ++ pr_notation ntn ++ str " is already defined" ++ spc() ++
-    pr_level ntn oldprec oldtyps ++
+    pr_level oldprec oldtyps ++
     spc() ++ str "while it is now required to be" ++ spc() ++
-    pr_level ntn prec typs ++ str ".")
+    pr_level prec typs ++ str ".")
 
 let error_parsing_incompatible_level ntn ntn' oldprec oldtyps prec typs =
   user_err
     (str "Notation " ++ pr_notation ntn ++ str " relies on a parsing rule for " ++ pr_notation ntn' ++ spc() ++
     str " which is already defined" ++ spc() ++
-    pr_level ntn oldprec oldtyps ++
+    pr_level oldprec oldtyps ++
     spc() ++ str "while it is now required to be" ++ spc() ++
-    pr_level ntn prec typs ++ str ".")
+    pr_level prec typs ++ str ".")
 
 let warn_incompatible_format =
   CWarnings.create ~name:"notation-incompatible-format" ~category:CWarnings.CoreCategories.parsing
@@ -904,9 +946,9 @@ let warn_prefix_incompatible_level =
     ~category:CWarnings.CoreCategories.parsing
     (fun (pref, ntn, pref_prec, pref_nottyps, prec, nottyps) ->
       str "Notations " ++ pr_notation pref
-      ++ spc () ++ str "defined " ++ pr_level pref pref_prec pref_nottyps
+      ++ spc () ++ str "defined " ++ pr_level pref_prec pref_nottyps
       ++ spc () ++ str "and " ++ pr_notation ntn
-      ++ spc () ++ str "defined " ++ pr_level ntn prec nottyps
+      ++ spc () ++ str "defined " ++ pr_level prec nottyps
       ++ spc () ++ str "have incompatible prefixes."
       ++ spc () ++ str "One of them will likely not work.")
 
@@ -989,7 +1031,7 @@ module NotationMods = struct
 type notation_modifier = {
   assoc         : Gramlib.Gramext.g_assoc option;
   level         : int option;
-  etyps         : (Id.t * simple_constr_prod_entry_key) list;
+  etyps         : (Id.t * CustomName.t simple_constr_prod_entry_key) list;
 
   (* common to syn_data below *)
   format        : lstring option;
@@ -1004,20 +1046,12 @@ let default = {
 
 end
 
-exception UnknownCustomEntry of string
-
-let () = CErrors.register_handler @@ function
-  | UnknownCustomEntry entry -> Some Pp.(str "Unknown custom entry: " ++ str entry ++ str ".")
-  | _ -> None
-
-let check_custom_entry entry =
-  if not (Egramrocq.exists_custom_entry entry) then
-    raise @@ UnknownCustomEntry entry
-
-let check_entry_type = function
-  | ETConstr (InCustomEntry entry,_,_) -> check_custom_entry entry
-  | ETConstr (InConstrEntry,_,_) | ETPattern _
-  | ETIdent | ETGlobal | ETBigint | ETName | ETBinder _-> ()
+let intern_entry_type = function
+  | ETConstr (entry,x,y) ->
+    let entry = intern_notation_entry entry in
+    ETConstr (entry,x,y)
+  | ETPattern _ | ETIdent | ETGlobal | ETBigint | ETName | ETBinder _ as v ->
+    v
 
 let interp_modifiers entry modl = let open NotationMods in
   let rec interp acc = function
@@ -1025,7 +1059,7 @@ let interp_modifiers entry modl = let open NotationMods in
   | CAst.{loc;v} :: l -> match v with
     | SetEntryType (s,typ) ->
         let id = Id.of_string s in
-        check_entry_type typ;
+        let typ = intern_entry_type typ in
         if Id.List.mem_assoc id acc.etyps then
           user_err ?loc
             (str s ++ str " is already assigned to an entry or constr level.");
@@ -1044,10 +1078,12 @@ let interp_modifiers entry modl = let open NotationMods in
           if acc.level <> None then
             user_err ?loc (str ("isolated \"at level " ^ string_of_int n ^ "\" unexpected."))
           else
-            user_err ?loc (str ("use \"in custom " ^ s ^ " at level " ^ string_of_int n ^
-                         "\"") ++ spc () ++ str "rather than" ++ spc () ++
-                         str ("\"at level " ^ string_of_int n ^ "\"") ++
-                         spc () ++ str "isolated.")
+            (* XXX could we print the qualid used for the custom entry by the user
+               instead of shortest_qualid? *)
+            user_err ?loc (str "use \"in custom " ++ Nametab.CustomEntries.pr s ++ str " at level " ++ int n ++
+                           str "\"" ++ spc () ++ str "rather than" ++ spc () ++
+                           str ("\"at level " ^ string_of_int n ^ "\"") ++
+                           spc () ++ str "isolated.")
         | InConstrEntry ->
           if acc.level <> None then
             user_err ?loc (str "A level is already assigned.");
@@ -1108,7 +1144,7 @@ let set_onlyprinting ?loc main_data =
   { main_data with onlyprinting = true }
 
 let set_custom_entry ?loc main_data entry' =
-  check_custom_entry entry';
+  let entry' = intern_custom_name entry' in
   match main_data.entry with
   | InConstrEntry -> { main_data with entry = InCustomEntry entry' }
   | _ -> user_err ?loc (str "\"in custom\" is given more than once.")
@@ -1324,6 +1360,11 @@ let warn_closed_notation_not_level_0 =
                        terminal symbol) should usually be at level 0 \
                        (default).")
 
+let warn_level_0_notation_not_closed =
+  CWarnings.create ~name:"level-0-notation-not-closed" ~category:CWarnings.CoreCategories.parsing
+    (fun () -> strbrk "Notations at level 0 should be closed (first and last \
+                       symbols should be terminal symbols).")
+
 let warn_postfix_notation_not_level_1 =
   CWarnings.create ~name:"postfix-notation-not-level-1" ~category:CWarnings.CoreCategories.parsing
     (fun () -> strbrk "Postfix notations (i.e. starting with a \
@@ -1344,14 +1385,14 @@ let find_precedence custom lev etyps symbols onlyprint =
       | _ :: t -> aux false t
       | [] -> b in
     aux false symbols in
-  match first_symbol with
+  let msgs, lev = match first_symbol with
   | None -> [],0
   | Some (NonTerminal x) ->
       let msgs, lev = match last_is_terminal (), lev with
         | false, _ -> [], lev
         | true, None -> [fun () -> Flags.if_verbose (Feedback.msg_info ?loc:None) (strbrk "Setting postfix notation at level 1.")], Some 1
         | true, Some 1 -> [], Some 1
-        | true, Some n -> [fun () -> warn_postfix_notation_not_level_1 ()], Some n in
+        | true, Some n -> [warn_postfix_notation_not_level_1], Some n in
       let test () =
         if onlyprint then
           if Option.is_empty lev then
@@ -1386,11 +1427,18 @@ let find_precedence custom lev etyps symbols onlyprint =
       begin match lev with
       | None -> [fun () -> Flags.if_verbose (Feedback.msg_info ?loc:None) (strbrk "Setting notation at level 0.")], 0
       | Some 0 -> [], 0
-      | Some n -> [fun () -> warn_closed_notation_not_level_0 ()], n
+      | Some n -> [warn_closed_notation_not_level_0], n
       end
   | Some _ ->
       if Option.is_empty lev then user_err Pp.(str "Cannot determine the level.");
-      [],Option.get lev
+      [],Option.get lev in
+  if lev <> 0 then msgs, lev else
+    match first_symbol, last_is_terminal (), symbols with
+    (* no warning for closed notations *)
+    | Some (Terminal _), true, _
+    (* nor for particular cases "" and "x" *)
+    | _, _, ([] | [_]) -> msgs, lev
+    | _ -> msgs @ [warn_level_0_notation_not_closed], lev
 
 let check_curly_brackets_notation_exists () =
   try let _ = Notation.level_of_notation (InConstrEntry,"{ _ }") in ()
@@ -1465,14 +1513,19 @@ let find_subentry_types from n assoc etyps symbols =
   let prec = List.map (assoc_of_type from n) sy_typs in
   sy_typs, prec
 
+let custom_entry_locality = Summary.ref ~name:"LOCAL-CUSTOM-ENTRY" CustomName.Set.empty
+(** If the entry is present then local *)
+
+let locality_of_custom_entry s = CustomName.Set.mem s !custom_entry_locality
+
 let check_locality_compatibility local custom i_typs =
   if not local then
     let subcustom = List.map_filter (function _,ETConstr (InCustomEntry s,_,_) -> Some s | _ -> None) i_typs in
     let allcustoms = match custom with InCustomEntry s -> s::subcustom | _ -> subcustom in
     List.iter (fun s ->
-        if Egramrocq.locality_of_custom_entry s then
-          user_err (strbrk "Notation has to be declared local as it depends on custom entry " ++ str s ++
-                    strbrk " which is local."))
+        if locality_of_custom_entry s then
+          user_err (strbrk "Notation has to be declared local as it depends on custom entry " ++
+                    Nametab.CustomEntries.pr s ++ strbrk " which is local."))
       (List.uniquize allcustoms)
 
 let longest_common_prefix_level ntn =
@@ -1769,6 +1822,7 @@ let make_generic_printing_rules reserved main_data ntn sd =
 
 let make_syntax_rules reserved main_data ntn sd =
   let open SynData in
+  List.iter (fun f -> f ()) sd.msgs;
   (* Prepare the parsing and printing rules *)
   let pa_rules = make_parsing_rules main_data sd in
   let pp_rules = make_generic_printing_rules reserved main_data ntn sd in
@@ -1857,7 +1911,6 @@ let make_notation_interpretation ~local main_data notation_symbols ntn syntax_ru
 (* Notations without interpretation (Reserved Notation) *)
 
 let add_reserved_notation ~local ~infix ({CAst.loc;v=df},mods) =
-  let open SynData in
   let (main_data,mods) = interp_non_syntax_modifiers ~reserved:true ~infix ~abbrev:false None mods in
   let mods = interp_modifiers main_data.entry mods in
   let notation_symbols, is_prim_token = analyze_notation_tokens ~onlyprinting:main_data.onlyprinting ~infix main_data.entry df in
@@ -1866,7 +1919,6 @@ let add_reserved_notation ~local ~infix ({CAst.loc;v=df},mods) =
   if is_prim_token then user_err ?loc (str "Notations for numbers or strings are primitive and need not be reserved.");
   let sd = compute_syntax_data ~local main_data notation_symbols ntn mods in
   let synext = make_syntax_rules true main_data ntn sd in
-  List.iter (fun f -> f ()) sd.msgs;
   Lib.add_leaf (inSyntaxExtension(local,(ntn,synext)))
 
 type notation_interpretation_decl =
@@ -2044,7 +2096,7 @@ let add_abbreviation ~local user_warns env ident (vars,c) modl =
   let interp = make_interpretation_vars ~default_if_binding:AsAnyPattern [] acvars level (List.map in_pat vars) in
   let vars = List.map (fun (x,_) -> (x, Id.Map.find x interp)) vars in
   let onlyparsing = only_parsing || fst (printability None [] vars false reversibility pat) in
-  Abbreviation.declare_abbreviation ~local user_warns ident ~onlyparsing (vars,pat)
+  Abbreviation.declare ~local user_warns ident ~onlyparsing (vars,pat)
 
 (**********************************************************************)
 (* Activating/deactivating notations                                  *)
@@ -2078,32 +2130,40 @@ let declare_notation_toggle local ~on ~all s =
 (** **************************************************************** **)
 (** Declaration of custom entries                                    **)
 
-let warn_custom_entry =
-  CWarnings.create ~name:"custom-entry-overridden" ~category:CWarnings.CoreCategories.parsing
-         (fun s ->
-          strbrk "Custom entry " ++ str s ++ strbrk " has been overridden.")
+let load_custom_entry i ((sp,kn),local) =
+  Nametab.CustomEntries.push (Until i) sp kn;
+  add_custom_compat kn;
+  Egramrocq.create_custom_entry kn;
+  let () = if local then
+      custom_entry_locality := CustomName.Set.add kn !custom_entry_locality
+  in
+  ()
 
-let load_custom_entry _ (local,s) =
-  if Egramrocq.exists_custom_entry s then warn_custom_entry s
-  else Egramrocq.create_custom_entry ~local s
+let import_custom_entry i ((sp,kn),_) =
+  Nametab.CustomEntries.push (Exactly i) sp kn
 
 let cache_custom_entry o = load_custom_entry 1 o
 
 let subst_custom_entry (subst,x) = x
 
-let classify_custom_entry (local,s) =
+let classify_custom_entry local =
   if local then Dispose else Substitute
 
-let inCustomEntry : locality_flag * string -> obj =
-  declare_object {(default_object "CUSTOM-ENTRIES") with
+let inCustomEntry : Id.t -> locality_flag -> obj =
+  declare_named_object {(default_object "CUSTOM-ENTRIES") with
       object_stage = Summary.Stage.Synterp;
       cache_function = cache_custom_entry;
       load_function = load_custom_entry;
+      open_function = filtered_open import_custom_entry;
       subst_function = subst_custom_entry;
       classify_function = classify_custom_entry}
 
 let declare_custom_entry local s =
-  if Egramrocq.exists_custom_entry s then
-    user_err Pp.(str "Custom entry " ++ str s ++ str " already exists.")
-  else
-    Lib.add_leaf (inCustomEntry (local,s))
+  let () = if List.mem (Id.to_string s) ["constr";"pattern";"ident";"global";"binder";"bigint"] then
+      user_err Pp.(quote (Id.print s) ++ str " is a reserved entry name.")
+  in
+  let () =
+    if Nametab.CustomEntries.exists (Lib.make_path s) then
+      user_err Pp.(Id.print s ++ str " already exists.")
+  in
+  Lib.add_leaf (inCustomEntry s local)

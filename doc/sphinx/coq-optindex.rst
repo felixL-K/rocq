@@ -1,9 +1,5 @@
 :orphan:
 
-.. hack to get index in TOC
+.. raw:: html
 
-.. _options_index:
-
--------------------------------
-Flags, options and tables index
--------------------------------
+   <meta http-equiv="refresh" content="0;URL=rocq-optindex.html">

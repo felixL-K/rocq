@@ -117,7 +117,7 @@ val interp_open_constr : ?expected_type:typing_constraint -> env -> evar_map -> 
 val interp_constr_evars : ?program_mode:bool -> env -> evar_map ->
   ?impls:internalization_env -> constr_expr -> evar_map * constr
 
-val interp_casted_constr_evars : ?program_mode:bool -> env -> evar_map ->
+val interp_casted_constr_evars : ?flags:Pretyping.inference_flags -> ?program_mode:bool -> env -> evar_map ->
   ?impls:internalization_env -> constr_expr -> types -> evar_map * constr
 
 val interp_type_evars : ?program_mode:bool -> env -> evar_map ->
@@ -142,11 +142,11 @@ val interp_type_evars_impls : ?flags:inference_flags -> env -> evar_map ->
 (** Without typing *)
 val intern_constr_pattern :
   env -> evar_map -> ?as_type:bool -> ?strict_check:bool -> ?ltacvars:ltac_sign ->
-    constr_pattern_expr -> Id.Set.t * constr_pattern
+    constr_pattern_expr -> Id.Set.t * uninstantiated_pattern
 
-val intern_uninstantiated_constr_pattern :
-  env -> evar_map -> ?as_type:bool -> ?strict_check:bool -> ?ltacvars:ltac_sign ->
-    constr_pattern_expr -> Id.Set.t * [`uninstantiated] constr_pattern_r
+val interp_constr_pattern :
+  env -> evar_map -> ?as_type:bool -> ?strict_check:bool ->
+    constr_pattern_expr -> Id.Set.t * constr_pattern
 
 (** Returns None if it's an abbreviation not bound to a name, raises an error
     if not existing *)

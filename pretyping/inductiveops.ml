@@ -28,13 +28,13 @@ let type_of_inductive env (ind,u) =
  let (mib,_ as specif) = Inductive.lookup_mind_specif env ind in
  Typeops.check_hyps_inclusion env (GlobRef.IndRef ind) mib.mind_hyps;
  let t = Inductive.type_of_inductive (specif,u) in
- EConstr.of_constr @@ Arguments_renaming.rename_type t (IndRef ind)
+ EConstr.of_constr @@ Arguments_renaming.rename_type env t (IndRef ind)
 
 let e_type_of_inductive env sigma (ind,u) =
  let (mib,_ as specif) = Inductive.lookup_mind_specif env ind in
  Reductionops.check_hyps_inclusion env sigma (GlobRef.IndRef ind) mib.mind_hyps;
  let t = Inductive.type_of_inductive (specif, EConstr.Unsafe.to_instance u) in
- EConstr.of_constr (Arguments_renaming.rename_type t (IndRef ind))
+ EConstr.of_constr (Arguments_renaming.rename_type env t (IndRef ind))
 
 (* Return type as quoted by the user *)
 let type_of_constructor env (cstr,u) =
@@ -43,14 +43,14 @@ let type_of_constructor env (cstr,u) =
    Inductive.lookup_mind_specif env (inductive_of_constructor cstr) in
  Typeops.check_hyps_inclusion env (GlobRef.ConstructRef cstr) mib.mind_hyps;
  let t = Inductive.type_of_constructor (cstr,u) specif in
- EConstr.of_constr @@ Arguments_renaming.rename_type t (ConstructRef cstr)
+ EConstr.of_constr @@ Arguments_renaming.rename_type env t (ConstructRef cstr)
 
 let e_type_of_constructor env sigma (cstr,u) =
  let (mib,_ as specif) =
    Inductive.lookup_mind_specif env (inductive_of_constructor cstr) in
  Reductionops.check_hyps_inclusion env sigma (GlobRef.ConstructRef cstr) mib.mind_hyps;
  let t = Inductive.type_of_constructor (cstr,EConstr.Unsafe.to_instance u) specif in
- EConstr.of_constr (Arguments_renaming.rename_type t (ConstructRef cstr))
+ EConstr.of_constr (Arguments_renaming.rename_type env t (ConstructRef cstr))
 
 (* Return constructor types in user form *)
 let type_of_constructors env (ind,u as indu) =
@@ -127,7 +127,7 @@ let mis_is_recursive_subset env listind rarg =
   Array.exists one_is_rec (dest_subterms rarg)
 
 let mis_is_recursive env ((ind,_),mib,mip) =
-  mis_is_recursive_subset env (List.init mib.mind_ntypes (fun i -> (ind,i)))
+  mis_is_recursive_subset env (List.init (Declareops.mind_ntypes mib) (fun i -> (ind,i)))
     (Rtree.Kind.make mip.mind_recargs)
 
 let mis_nf_constructor_type ((_,j),u) (mib,mip) =
@@ -248,7 +248,9 @@ let inductive_has_local_defs env ind =
 let squash_elim_sort sigma squash rtnsort =
   let open Inductive in
   let add_unif_if_cannot_elim_into starget =
-    if Sorts.eliminates_to starget @@ ESorts.kind sigma rtnsort
+    let q = Sorts.quality starget in
+    let q' = ESorts.quality sigma rtnsort in
+    if Inductive.eliminates_to (Evd.elim_graph sigma) q q'
     then sigma
     else Evd.set_eq_sort sigma rtnsort @@ ESorts.make starget in
   match squash with
@@ -280,19 +282,21 @@ let loc_squashed_to_quality sigma u q =
 
 let is_squashed sigma specifu =
   Inductive.is_squashed_gen
+    (Evd.elim_graph sigma)
     (loc_indsort_to_quality sigma)
     (loc_squashed_to_quality sigma)
     specifu
 
-let is_allowed_elimination sigma (((mib,_),_) as specifu) s =
-  match mib.mind_record with
+let is_allowed_elimination sigma (((_,mip),_) as specifu) s =
+  match mip.mind_record with
   | PrimRecord _ -> true
   | NotRecord | FakeRecord ->
      let s = EConstr.ESorts.kind sigma s in
-     Inductive.allowed_elimination_gen
+     let g = Evd.elim_graph sigma in
+     Inductive.allowed_elimination_gen g
         (loc_indsort_to_quality sigma)
         (loc_squashed_to_quality sigma)
-        (Inductive.is_allowed_elimination_actions s)
+        (Inductive.is_allowed_elimination_actions g s)
         specifu s
 
 let make_allowed_elimination_actions sigma s =
@@ -304,18 +308,19 @@ let make_allowed_elimination_actions sigma s =
     with UGraph.UniverseInconsistency _ -> None)
   ; squashed_to_quality =
       fun indq -> let sq = EConstr.ESorts.quality sigma s in
-               if Inductive.eliminates_to indq sq
+               if Inductive.eliminates_to (Evd.elim_graph sigma) indq sq
                then Some sigma
                else
                  let mk q = ESorts.make @@ Sorts.make q Univ.Universe.type0 in
                  try Some (Evd.set_leq_sort sigma (mk sq) (mk indq))
                  with UGraph.UniverseInconsistency _ -> None }
 
-let make_allowed_elimination sigma ((mib,_),_ as specifu) s =
-  match mib.mind_record with
+let make_allowed_elimination sigma ((_,mip),_ as specifu) s =
+  match mip.mind_record with
   | PrimRecord _ -> Some sigma
   | NotRecord | FakeRecord ->
      Inductive.allowed_elimination_gen
+        (Evd.elim_graph sigma)
         (loc_indsort_to_quality sigma)
         (loc_squashed_to_quality sigma)
         (make_allowed_elimination_actions sigma s)
@@ -325,7 +330,7 @@ let make_allowed_elimination sigma ((mib,_),_ as specifu) s =
 (* XXX questionable for sort poly inductives *)
 let elim_sort (mib,mip) =
   let is_record =
-    match mib.mind_record with
+    match mip.mind_record with
     | NotRecord | FakeRecord -> false
     | PrimRecord _ -> true in
   let has_args mip =
@@ -359,7 +364,7 @@ let sorts_for_schemes specif =
   constant_sorts_below (elim_sort specif)
 
 let has_dependent_elim (mib,mip) =
-  match mib.mind_record with
+  match mip.mind_record with
   | PrimRecord _ -> mib.mind_finite == BiFinite || mip.mind_relevance == Irrelevant
   | NotRecord | FakeRecord -> true
 
@@ -376,6 +381,7 @@ let make_case_info env ind style =
 (*s Useful functions *)
 
 type constructor_summary = {
+  cs_name : Id.t;
   cs_cstr : constructor puniverses;
   cs_params : constr list;
   cs_nargs : int;
@@ -384,6 +390,7 @@ type constructor_summary = {
 }
 
 let lift_constructor n cs = {
+  cs_name = cs.cs_name;
   cs_cstr = cs.cs_cstr;
   cs_params = List.map (lift n) cs.cs_params;
   cs_nargs = cs.cs_nargs;
@@ -412,7 +419,9 @@ let get_constructor ((ind,u),mib,mip,params) j =
   let (args,ccl) = Term.decompose_prod_decls typi in
   let (_,allargs) = Constr.decompose_app_list ccl in
   let vargs = List.skipn (List.length params) allargs in
-  { cs_cstr = (ith_constructor_of_inductive ind j,u);
+  let name = mip.mind_consnames.(j-1) in
+  { cs_name = name;
+    cs_cstr = (ith_constructor_of_inductive ind j,u);
     cs_params = params;
     cs_nargs = Context.Rel.length args;
     cs_args = EConstr.of_rel_context args;
@@ -425,9 +434,36 @@ let get_constructors env (ind,params) =
 
 let get_projections = Environ.get_projections
 
+(* ************************************* *)
+module Internal = struct
+(* FIXME temporary copy of [Typeops] functions: previously, there was an hack in
+   place to make the kernel aware of [QVar]s eliminating to [Prop]. It's not
+   working anymore with the [QGraph], so we redefine [nf_relevance] and
+   [should_invert_case] to work with the [QGraph] in [sigma] (which knows the
+   relevant [QVar]s *)
+let nf_relevance sigma = function
+  | Sorts.RelevanceVar q as r ->
+     if UState.is_above_prop (Evd.ustate sigma) q
+     then Sorts.Relevant
+     else r
+  | (Sorts.Irrelevant | Sorts.Relevant) as r -> r
+
+let should_invert_case env sigma r (ci : Constr.case_info) =
+  Sorts.relevance_equal (nf_relevance sigma r) Sorts.Relevant &&
+    let mib,mip = Inductive.lookup_mind_specif env ci.ci_ind in
+    (* mind_relevance cannot be a pseudo sort poly variable so don't use check_relevance *)
+    Sorts.relevance_equal mip.mind_relevance Sorts.Irrelevant &&
+      match Array.length mip.mind_nf_lc with
+      | 0 -> true
+      | 1 ->
+         List.length (fst mip.mind_nf_lc.(0)) = List.length mib.mind_params_ctxt
+      | _ -> false
+end
+(* ************************************* *)
+
 let make_case_invert env sigma (IndType (((ind,u),params),indices)) ~case_relevance:r ci =
   let r = ERelevance.kind sigma r in
-  if Typeops.should_invert_case env r ci
+  if Internal.should_invert_case env sigma r ci
   then Constr.CaseInvert {indices=Array.of_list indices}
   else Constr.NoInvert
 
@@ -577,11 +613,11 @@ let compute_projections env (kn, i as ind) =
   let mib = Environ.lookup_mind kn env in
   let u = UVars.make_abstract_instance (Declareops.inductive_polymorphic_context mib) in
   let u = EInstance.make u in
-  let x = match mib.mind_record with
+  let x = match mib.mind_packets.(i).mind_record with
   | NotRecord | FakeRecord ->
     anomaly Pp.(str "Trying to build primitive projections for a non-primitive record")
   | PrimRecord info ->
-    let id, _, _, _ = info.(i) in
+    let id, _, _, _ = info in
     make_annot (Name id) (ERelevance.make mib.mind_packets.(i).mind_relevance)
   in
   let pkt = mib.mind_packets.(i) in
@@ -617,8 +653,7 @@ let compute_projections env (kn, i as ind) =
         (proj_arg, j+1, pbs, subst)
     | LocalAssum (na,t) ->
       match na.binder_name with
-      | Name id ->
-        let lab = Label.of_id id in
+      | Name lab ->
         let proj_relevant = na.binder_relevance in
         let kn = Projection.Repr.make ind ~proj_npars:mib.mind_nparams ~proj_arg lab in
         (* from [params, field1,..,fieldj |- t(params,field1,..,fieldj)]

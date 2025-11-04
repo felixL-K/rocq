@@ -1,14 +1,15 @@
-ifeq "$(COQBIN)" ""
-  COQBIN=$(dir $(shell which coqtop))/
-endif
+# define COQBIN to the empty string if it's not already defined
+# (in case we want to run make with --warn-undefined-variables)
+COQBIN?=
 
-%: Makefile.coq
+# all unknown targets depend on the generated Rocq makefile
+%: Makefile.rocq
 
-Makefile.coq: _CoqProject
-	$(COQBIN)coq_makefile -f _CoqProject -o Makefile.coq
+# rule to generate the Rocq makefile
+Makefile.rocq: _CoqProject
+	$(COQBIN)rocq makefile -f _CoqProject -o Makefile.rocq
 
-tests: all
-	@$(MAKE) -C tests -s clean
-	@$(MAKE) -C tests -s all
-
--include Makefile.coq
+# use the generated Rocq makefile
+# -include instead of include: don't error if it's not there
+# (IIRC some version of make doesn't realize that it should be built if we don't use -include)
+-include Makefile.rocq

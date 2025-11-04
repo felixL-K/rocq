@@ -118,7 +118,7 @@ val constructor_nrealargs : env -> constructor -> int
 (** @return args with letin *)
 val constructor_nrealdecls : env -> constructor -> int
 
-(** @return tags of all decls: true = assumption, false = letin *)
+(** @return tags of all decls: true = letin, false = assumption *)
 val inductive_alltags : env -> inductive -> bool list
 val constructor_alltags : env -> constructor -> bool list
 
@@ -158,6 +158,7 @@ val type_of_projection_knowing_arg : env -> evar_map -> Projection.t ->
 (** Extract information from an inductive family *)
 
 type constructor_summary = {
+  cs_name : Id.t; (* name of the constructor *)
   cs_cstr : constructor puniverses;    (* internal name of the constructor plus universes *)
   cs_params : constr list;   (* parameters of the constructor in current ctx *)
   cs_nargs : int;            (* length of arguments signature (letin included) *)
@@ -230,3 +231,9 @@ val compute_projections : Environ.env -> inductive -> (constr * types) array
 val control_only_guard : env -> Evd.evar_map -> EConstr.types -> unit
 
 val error_not_allowed_dependent_analysis : Environ.env -> bool -> Names.inductive -> Pp.t
+
+module Internal : sig
+  (* FIXME hack for the [QVar]s, see the implementation for more information. *)
+  val nf_relevance : Evd.evar_map -> Sorts.relevance -> Sorts.relevance
+  val should_invert_case : env -> Evd.evar_map -> Sorts.relevance -> Constr.case_info -> bool
+end

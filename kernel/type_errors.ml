@@ -62,6 +62,7 @@ type ('constr, 'types, 'r) ptype_error =
   | NumberBranches of ('constr, 'types) punsafe_judgment * int
   | IllFormedCaseParams
   | IllFormedBranch of 'constr * pconstructor * 'constr * 'constr
+  | BadProjType of ('constr, 'types) punsafe_judgment * Projection.t
   | Generalization of (Name.t * 'types) * ('constr, 'types) punsafe_judgment
   | ActualType of ('constr, 'types) punsafe_judgment * 'types
   | IncorrectPrimitive of (CPrimitives.op_or_type,'types) punsafe_judgment * 'types
@@ -70,8 +71,9 @@ type ('constr, 'types, 'r) ptype_error =
   | IllFormedRecBody of 'constr pguard_error * (Name.t, 'r) Context.pbinder_annot array * int * env * ('constr, 'types) punsafe_judgment array
   | IllTypedRecBody of
       int * (Name.t, 'r) Context.pbinder_annot array * ('constr, 'types) punsafe_judgment array * 'types array
-  | UnsatisfiedQConstraints of Sorts.QConstraints.t
+  | UnsatisfiedElimConstraints of Sorts.ElimConstraints.t
   | UnsatisfiedConstraints of Constraints.t
+  | UnsatisfiedQCumulConstraints of Sorts.QCumulConstraints.t
   | UndeclaredQualities of Sorts.QVar.Set.t
   | UndeclaredUniverses of Level.Set.t
   | DisallowedSProp
@@ -80,6 +82,8 @@ type ('constr, 'types, 'r) ptype_error =
   | BadInvert
   | BadVariance of { lev : Level.t; expected : Variance.t; actual : Variance.t }
   | UndeclaredUsedVariables of { declared_vars : Id.Set.t; inferred_vars : Id.Set.t }
+  | IllFormedConstant of Constant.t * KerName.t
+  | IllFormedInductive of MutInd.t * KerName.t
 
 type type_error = (constr, types, Sorts.relevance) ptype_error
 
@@ -130,6 +134,9 @@ let error_number_branches env cj expn =
 let error_ill_formed_branch env c i actty expty =
   raise (TypeError (env, IllFormedBranch (c, i, actty, expty)))
 
+let error_bad_proj_type env cj p =
+  raise (TypeError (env, BadProjType (cj, p)))
+
 let error_generalization env nvar c =
   raise (TypeError (env, Generalization (nvar,c)))
 
@@ -151,11 +158,14 @@ let error_ill_formed_rec_body env why lna i fixenv vdefj =
 let error_ill_typed_rec_body env i lna vdefj vargs =
   raise (TypeError (env, IllTypedRecBody (i,lna,vdefj,vargs)))
 
-let error_unsatisfied_qconstraints env c =
-  raise (TypeError (env, UnsatisfiedQConstraints c))
+let error_unsatisfied_elim_constraints env c =
+  raise (TypeError (env, UnsatisfiedElimConstraints c))
 
 let error_unsatisfied_constraints env c =
   raise (TypeError (env, UnsatisfiedConstraints c))
+
+let error_unsatisfied_qcumul_constraints env c =
+  raise (TypeError (env, UnsatisfiedQCumulConstraints c))
 
 let error_undeclared_qualities env l =
   raise (TypeError (env, UndeclaredQualities l))
@@ -180,6 +190,12 @@ let error_bad_variance env ~lev ~expected ~actual =
 
 let error_undeclared_used_variables env ~declared_vars ~inferred_vars =
   raise (TypeError (env, UndeclaredUsedVariables {declared_vars; inferred_vars}))
+
+let error_ill_formed_constant env cst kn =
+  raise (TypeError (env, IllFormedConstant (cst, kn)))
+
+let error_ill_formed_inductive env ind kn =
+  raise (TypeError (env, IllFormedInductive (ind, kn)))
 
 let map_pfix_guard_error f = function
 | NotEnoughAbstractionInFixBody -> NotEnoughAbstractionInFixBody
@@ -208,8 +224,8 @@ let map_pguard_error f = function
 let map_ptype_error fr f = function
 | UnboundRel _ | UnboundVar _ | CaseOnPrivateInd _ | IllFormedCaseParams
 | UndeclaredQualities _ | UndeclaredUniverses _ | DisallowedSProp
-| UnsatisfiedQConstraints _ | UnsatisfiedConstraints _
-| ReferenceVariables _ | BadInvert | BadVariance _ | UndeclaredUsedVariables _ as e -> e
+| UnsatisfiedElimConstraints _ | UnsatisfiedConstraints _ | UnsatisfiedQCumulConstraints _
+| ReferenceVariables _ | BadInvert | BadVariance _ | UndeclaredUsedVariables _ | IllFormedConstant _ | IllFormedInductive _ as e -> e
 | NotAType j -> NotAType (on_judgment f j)
 | BadAssumption j -> BadAssumption (on_judgment f j)
 | ElimArity (pi, c, ar) -> ElimArity (pi, f c, ar)
@@ -217,6 +233,7 @@ let map_ptype_error fr f = function
 | WrongCaseInfo (pi, ci) -> WrongCaseInfo (pi, ci)
 | NumberBranches (j, n) -> NumberBranches (on_judgment f j, n)
 | IllFormedBranch (c, pc, t1, t2) -> IllFormedBranch (f c, pc, f t1, f t2)
+| BadProjType (j, p) -> BadProjType (on_judgment f j, p)
 | Generalization ((na, t), j) -> Generalization ((na, f t), on_judgment f j)
 | ActualType (j, t) -> ActualType (on_judgment f j, f t)
 | IncorrectPrimitive (p, t) -> IncorrectPrimitive ({p with uj_type=f p.uj_type}, f t)

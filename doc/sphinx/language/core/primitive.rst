@@ -1,3 +1,5 @@
+.. _primitive-objects:
+
 Primitive objects
 =================
 
@@ -110,6 +112,12 @@ Literal values (of type :g:`Float64.t`) are extracted to literal OCaml
 values (of type :g:`float`) written in hexadecimal notation and
 wrapped into the :g:`Float64.of_float` constructor, e.g.:
 :g:`Float64.of_float (0x1p+0)`.
+
+.. flag:: Printing Float
+
+   When off, primitive floats use a low level hexadecimal representation.
+
+   On by default.
 
 .. _primitive-arrays:
 

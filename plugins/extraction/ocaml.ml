@@ -59,7 +59,7 @@ let keywords =
 (* Note: do not shorten [str "foo" ++ fnl ()] into [str "foo\n"],
    the '\n' character interacts badly with the Format boxing mechanism *)
 
-let pp_open table mp = str ("open "^ string_of_modfile table mp) ++ fnl ()
+let pp_open table dp = str ("open "^ string_of_modfile (State.get_table table) dp) ++ fnl ()
 
 let pp_comment s = str "(* " ++ hov 0 s ++ str " *)"
 
@@ -79,12 +79,12 @@ let pp_mldummy usf =
 
 let preamble table _ comment used_modules usf =
   pp_header_comment comment ++
-  then_nl (prlist (fun o -> pp_open table o) used_modules) ++
+  then_nl (prlist (fun o -> pp_open table o) (DirPath.Set.elements used_modules)) ++
   then_nl (pp_tdummy usf ++ pp_mldummy usf)
 
 let sig_preamble table _ comment used_modules usf =
   pp_header_comment comment ++
-  then_nl (prlist (fun o -> pp_open table o) used_modules) ++
+  then_nl (prlist (fun o -> pp_open table o) (DirPath.Set.elements used_modules)) ++
   then_nl (pp_tdummy usf)
 
 (*s The pretty-printer for Ocaml syntax*)
@@ -147,12 +147,12 @@ let get_infix r =
   let s = find_custom r in
   String.sub s 1 (String.length s - 2)
 
-let get_ind = let open GlobRef in function
-  | IndRef _ as r -> r
-  | ConstructRef (ind,_) -> IndRef ind
+let get_ind r = let open GlobRef in match r.glob with
+  | IndRef _ -> r
+  | ConstructRef (ind,_) -> { glob = IndRef ind; inst = r.inst }
   | _ -> assert false
 
-let kn_of_ind = let open GlobRef in function
+let kn_of_ind r = let open GlobRef in match r.glob with
   | IndRef (kn,_) -> MutInd.user kn
   | _ -> assert false
 
@@ -176,7 +176,7 @@ let pp_type table par vl t =
         pp_par par (pp_rec true a1 ++ str (get_infix r) ++ pp_rec true a2)
     | Tglob (r,[]) -> pp_global table Type r
     | Tglob (gr,l)
-        when not (keep_singleton ()) && Rocqlib.check_ref sig_type_name gr ->
+        when not (keep_singleton ()) && Rocqlib.check_ref sig_type_name gr.glob ->
         pp_tuple_light pp_rec l
     | Tglob (r,l) ->
         pp_tuple_light pp_rec l ++ spc () ++ pp_global table Type r
@@ -263,13 +263,13 @@ let rec pp_expr table par env args =
           | [a1;a2] when is_infix r ->
             let pp = pp_expr table true env [] in
             pp_par par (pp a1 ++ str (get_infix r) ++ pp a2)
-          | _ when is_coinductive table r ->
+          | _ when is_coinductive (State.get_table table) r ->
             let ne = not (List.is_empty a) in
             let tuple = space_if ne ++ pp_tuple (pp_expr table true env []) a in
             pp_par par (str "lazy " ++ pp_par ne (pp_global table Cons r ++ tuple))
           | [] -> pp_global table Cons r
           | _ ->
-            let fds = get_record_fields table r in
+            let fds = get_record_fields (State.get_table table) r in
             if not (List.is_empty fds) then
               pp_record_pat (pp_fields table r fds, List.map (pp_expr table true env []) a)
             else
@@ -297,7 +297,7 @@ let rec pp_expr table par env args =
         apply2 (hov 2 inner)
     | MLcase (typ, t, pv) ->
         let head =
-          if not (is_coinductive_type table typ) then pp_expr table false env [] t
+          if not (is_coinductive_type (State.get_table table) typ) then pp_expr table false env [] t
           else (str "Lazy.force" ++ spc () ++ pp_expr table true env [] t)
         in
         (* First, can this match be printed as a mere record projection ? *)
@@ -333,7 +333,7 @@ let rec pp_expr table par env args =
 
 and pp_record_proj table par env typ t pv args =
   (* Can a match be printed as a mere record projection ? *)
-  let fields = record_fields_of_type table typ in
+  let fields = record_fields_of_type (State.get_table table) typ in
   if List.is_empty fields then raise Impossible;
   if not (Int.equal (Array.length pv) 1) then raise Impossible;
   if has_deep_pattern pv then raise Impossible;
@@ -380,7 +380,7 @@ and pp_cons_pat table r ppl =
   if is_infix r && Int.equal (List.length ppl) 2 then
     List.hd ppl ++ str (get_infix r) ++ List.hd (List.tl ppl)
   else
-    let fields = get_record_fields table r in
+    let fields = get_record_fields (State.get_table table) r in
     if not (List.is_empty fields) then pp_record_pat (pp_fields table r fields, ppl)
     else if String.is_empty (str_global table Cons r) then
       pp_boxed_tuple identity ppl (* Hack Extract Inductive prod *)
@@ -423,7 +423,7 @@ and pp_function table env t =
   let bl,env' = push_vars (List.map id_of_mlid bl) env in
   match t' with
     | MLcase(Tglob(r,_),MLrel 1,pv) when
-        not (is_coinductive table r) && List.is_empty (get_record_fields table r) &&
+        not (is_coinductive (State.get_table table) r) && List.is_empty (get_record_fields (State.get_table table) r) &&
         not (is_custom_match pv) ->
         if not (ast_occurs 1 (MLcase(Tunknown,MLaxiom "",pv))) then
           pr_binding (List.rev (List.tl bl)) ++
@@ -477,7 +477,7 @@ let pp_Dfix table (rv,c,t) =
       else
         let def =
           if is_custom rv.(i) then str " = " ++ str (find_custom rv.(i))
-          else pp_function table (empty_env ()) c.(i)
+          else pp_function table (empty_env table ()) c.(i)
         in
         (if init then mt () else cut2 ()) ++
         pp_val table names.(i) t.(i) ++
@@ -487,15 +487,16 @@ let pp_Dfix table (rv,c,t) =
 
 (*s Pretty-printing of inductive types declaration. *)
 
-let pp_equiv table param_list name = function
+let pp_equiv table param_list name inst = function
   | NoEquiv, _ -> mt ()
   | Equiv kn, i ->
-      str " = " ++ pp_parameters param_list ++ pp_global table Type (GlobRef.IndRef (MutInd.make1 kn,i))
+    let r = { glob = GlobRef.IndRef (MutInd.make1 kn, i); inst } in
+    str " = " ++ pp_parameters param_list ++ pp_global table Type r
   | RenEquiv ren, _  ->
       str " = " ++ pp_parameters param_list ++ str (ren^".") ++ name
 
 
-let pp_one_ind table prefix ip_equiv pl name cnames ctyps =
+let pp_one_ind table prefix inst ip_equiv pl name cnames ctyps =
   let pl = rename_tvars keywords pl in
   let pp_constructor i typs =
     (if Int.equal i 0 then mt () else fnl ()) ++
@@ -505,7 +506,7 @@ let pp_one_ind table prefix ip_equiv pl name cnames ctyps =
             (fun () -> spc () ++ str "* ") (pp_type table true pl) typs)
   in
   pp_parameters pl ++ str prefix ++ name ++
-  pp_equiv table pl name ip_equiv ++ str " =" ++
+  pp_equiv table pl name inst ip_equiv ++ str " =" ++
   if Int.equal (Array.length ctyps) 0 then str " |"
   else fnl () ++ v 0 (prvecti pp_constructor ctyps)
 
@@ -516,22 +517,22 @@ let pp_logical_ind packet =
               prvect_with_sep spc Id.print packet.ip_consnames) ++
   fnl ()
 
-let pp_singleton table kn packet =
-  let name = pp_global_name table Type (GlobRef.IndRef (kn,0)) in
+let pp_singleton table packet =
+  let name = pp_global_name table Type packet.ip_typename_ref in
   let l = rename_tvars keywords packet.ip_vars in
   hov 2 (str "type " ++ pp_parameters l ++ name ++ str " =" ++ spc () ++
          pp_type table false l (List.hd packet.ip_types.(0)) ++ fnl () ++
          pp_comment (str "singleton inductive, whose constructor was " ++
                      Id.print packet.ip_consnames.(0)))
 
-let pp_record table kn fields ip_equiv packet =
-  let ind = GlobRef.IndRef (kn,0) in
+let pp_record table fields ip_equiv packet =
+  let ind = packet.ip_typename_ref in
   let name = pp_global_name table Type ind in
   let fieldnames = pp_fields table ind fields in
   let l = List.combine fieldnames packet.ip_types.(0) in
   let pl = rename_tvars keywords packet.ip_vars in
   str "type " ++ pp_parameters pl ++ name ++
-  pp_equiv table pl name ip_equiv ++ str " = { "++
+  pp_equiv table pl name ind.inst ip_equiv ++ str " = { "++
   hov 0 (prlist_with_sep (fun () -> str ";" ++ spc ())
            (fun (p,t) -> p ++ str " : " ++ pp_type table true pl t) l)
   ++ str " }"
@@ -542,33 +543,34 @@ let pp_coind pl name =
   pp_parameters pl ++ str "__" ++ name ++ str " Lazy.t" ++
   fnl() ++ str "and "
 
-let pp_ind table co kn ind =
+let pp_ind table co ind =
   let prefix = if co then "__" else "" in
   let initkwd = str "type " in
   let nextkwd = fnl () ++ str "and " in
   let names =
     Array.mapi (fun i p -> if p.ip_logical then mt () else
-                  pp_global_name table Type (GlobRef.IndRef (kn,i)))
+                  pp_global_name table Type p.ip_typename_ref)
       ind.ind_packets
   in
   let cnames =
     Array.mapi
       (fun i p -> if p.ip_logical then [||] else
-         Array.mapi (fun j _ -> pp_global table Cons (GlobRef.ConstructRef ((kn,i),j+1)))
+         Array.mapi (fun j _ -> pp_global table Cons p.ip_consnames_ref.(j))
            p.ip_types)
       ind.ind_packets
   in
   let rec pp i kwd =
     if i >= Array.length ind.ind_packets then mt ()
     else
-      let ip = (kn,i) in
+      let ip = ind.ind_packets.(i).ip_typename_ref in
       let ip_equiv = ind.ind_equiv, i in
       let p = ind.ind_packets.(i) in
-      if is_custom (GlobRef.IndRef ip) then pp (i+1) kwd
+      if is_custom ip then pp (i+1) kwd
       else if p.ip_logical then pp_logical_ind p ++ pp (i+1) kwd
       else
+        let inst = p.ip_typename_ref.inst in
         kwd ++ (if co then pp_coind p.ip_vars names.(i) else mt ()) ++
-        pp_one_ind table prefix ip_equiv p.ip_vars names.(i) cnames.(i) p.ip_types ++
+        pp_one_ind table prefix inst ip_equiv p.ip_vars names.(i) cnames.(i) p.ip_types ++
         pp (i+1) nextkwd
   in
   pp 0 initkwd
@@ -576,17 +578,17 @@ let pp_ind table co kn ind =
 
 (*s Pretty-printing of a declaration. *)
 
-let pp_mind table kn i =
+let pp_mind table i =
   match i.ind_kind with
-    | Singleton -> pp_singleton table kn i.ind_packets.(0)
-    | Coinductive -> pp_ind table true kn i
-    | Record fields -> pp_record table kn fields (i.ind_equiv,0) i.ind_packets.(0)
-    | Standard -> pp_ind table false kn i
+    | Singleton -> pp_singleton table i.ind_packets.(0)
+    | Coinductive -> pp_ind table true i
+    | Record fields -> pp_record table fields (i.ind_equiv,0) i.ind_packets.(0)
+    | Standard -> pp_ind table false i
 
 let pp_decl table = function
     | Dtype (r,_,_) when is_inline_custom r -> mt ()
     | Dterm (r,_,_) when is_inline_custom r -> mt ()
-    | Dind (kn,i) -> pp_mind table kn i
+    | Dind i -> pp_mind table i
     | Dtype (r, l, t) ->
         let name = pp_global_name table Type r in
         let l = rename_tvars keywords l in
@@ -608,7 +610,7 @@ let pp_decl table = function
           if is_foreign_custom r then str ": " ++ pp_type table false [] t ++ str " = \"" ++ str (find_custom r) ++ str "\""
           (* Otherwise, check if it is a regular custom term. *)
           else if is_custom r then str (" = " ^ find_custom r)
-          else pp_function table (empty_env ()) a
+          else pp_function table (empty_env table ()) a
         in
         let name = pp_global_name table Term r in
         (* If it is an foreign custom, begin the expression with 'external'/'foreign' instead of 'let' *)
@@ -632,7 +634,7 @@ let pp_decl table = function
 let pp_spec table = function
   | Sval (r,_) when is_inline_custom r -> mt ()
   | Stype (r,_,_) when is_inline_custom r -> mt ()
-  | Sind (kn,i) -> pp_mind table kn i
+  | Sind i -> pp_mind table i
   | Sval (r,t) ->
       let def = pp_type table false [] t in
       let name = pp_global_name table Term r in
@@ -656,7 +658,7 @@ let pp_spec table = function
 let rec pp_specif table = function
   | (_,Spec (Sval _ as s)) -> pp_spec table s
   | (l,Spec s) ->
-     (match Common.get_duplicate (top_visible_mp ()) l with
+     (match Common.State.get_duplicate table (State.get_top_visible_mp table) l with
       | None -> pp_spec table s
       | Some ren ->
          hov 1 (str ("module "^ren^" : sig") ++ fnl () ++ pp_spec table s) ++
@@ -664,9 +666,9 @@ let rec pp_specif table = function
          str ("include module type of struct include "^ren^" end"))
   | (l,Smodule mt) ->
       let def = pp_module_type table [] mt in
-      let name = pp_modname table (MPdot (top_visible_mp (), l)) in
+      let name = pp_modname table (MPdot (State.get_top_visible_mp table, l)) in
       hov 1 (str "module " ++ name ++ str " :" ++ fnl () ++ def) ++
-      (match Common.get_duplicate (top_visible_mp ()) l with
+      (match Common.State.get_duplicate table (State.get_top_visible_mp table) l with
        | None -> Pp.mt ()
        | Some ren ->
          fnl () ++
@@ -674,9 +676,9 @@ let rec pp_specif table = function
                 str "module type of struct include " ++ name ++ str " end"))
   | (l,Smodtype mt) ->
       let def = pp_module_type table [] mt in
-      let name = pp_modname table (MPdot (top_visible_mp (), l)) in
+      let name = pp_modname table (MPdot (State.get_top_visible_mp table, l)) in
       hov 1 (str "module type " ++ name ++ str " =" ++ fnl () ++ def) ++
-      (match Common.get_duplicate (top_visible_mp ()) l with
+      (match Common.State.get_duplicate table (State.get_top_visible_mp table) l with
        | None -> Pp.mt ()
        | Some ren -> fnl () ++ str ("module type "^ren^" = ") ++ name)
 
@@ -686,50 +688,50 @@ and pp_module_type table params = function
   | MTfunsig (mbid, mt, mt') ->
       let typ = pp_module_type table [] mt in
       let name = pp_modname table (MPbound mbid) in
-      let def = pp_module_type table (MPbound mbid :: params) mt' in
+      let def = pp_module_type table (mbid :: params) mt' in
       str "functor (" ++ name ++ str ":" ++ typ ++ str ") ->" ++ fnl () ++ def
   | MTsig (mp, sign) ->
-      push_visible mp params;
-      let try_pp_specif l x =
-        let px = pp_specif table x in
-        if Pp.ismt px then l else px::l
-      in
-      (* We cannot use fold_right here due to side effects in pp_specif *)
-      let l = List.fold_left try_pp_specif [] sign in
-      let l = List.rev l in
-      pop_visible ();
+      let l = State.with_visibility table mp params begin fun table ->
+        let try_pp_specif l x =
+          let px = pp_specif table x in
+          if Pp.ismt px then l else px::l
+        in
+        (* We cannot use fold_right here due to side effects in pp_specif *)
+        let l = List.fold_left try_pp_specif [] sign in
+        List.rev l
+      end in
       str "sig" ++ fnl () ++
       (if List.is_empty l then mt ()
        else
          v 1 (str " " ++ prlist_with_sep cut2 identity l) ++ fnl ())
       ++ str "end"
-  | MTwith(mt,ML_With_type(idl,vl,typ)) ->
+  | MTwith(mt,ML_With_type (rlv, idl, vl, typ)) ->
       let ids = pp_parameters (rename_tvars keywords vl) in
       let mp_mt = msid_of_mt mt in
       let l,idl' = List.sep_last idl in
       let mp_w =
-        List.fold_left (fun mp l -> MPdot(mp,Label.of_id l)) mp_mt idl'
+        List.fold_left (fun mp l -> MPdot(mp, l)) mp_mt idl'
       in
-      let r = GlobRef.ConstRef (Constant.make2 mp_w (Label.of_id l)) in
-      push_visible mp_mt [];
-      let pp_w = str " with type " ++ ids ++ pp_global table Type r in
-      pop_visible();
+      let r = { glob = GlobRef.ConstRef (Constant.make2 mp_w l); inst = rlv } in
+      let pp_w = State.with_visibility table mp_mt [] begin fun table ->
+        str " with type " ++ ids ++ pp_global table Type r
+      end in
       pp_module_type table [] mt ++ pp_w ++ str " = " ++ pp_type table false vl typ
   | MTwith(mt,ML_With_module(idl,mp)) ->
       let mp_mt = msid_of_mt mt in
       let mp_w =
-        List.fold_left (fun mp id -> MPdot(mp,Label.of_id id)) mp_mt idl
+        List.fold_left (fun mp id -> MPdot(mp, id)) mp_mt idl
       in
-      push_visible mp_mt [];
-      let pp_w = str " with module " ++ pp_modname table mp_w in
-      pop_visible ();
+      let pp_w = State.with_visibility table mp_mt [] begin fun table ->
+        str " with module " ++ pp_modname table mp_w
+      end in
       pp_module_type table [] mt ++ pp_w ++ str " = " ++ pp_modname table mp
 
 let is_short = function MEident _ | MEapply _ -> true | _ -> false
 
 let rec pp_structure_elem table = function
   | (l,SEdecl d) ->
-     (match Common.get_duplicate (top_visible_mp ()) l with
+     (match Common.State.get_duplicate table (State.get_top_visible_mp table) l with
       | None -> pp_decl table d
       | Some ren ->
          v 1 (str ("module "^ren^" = struct") ++ fnl () ++ pp_decl table d) ++
@@ -737,23 +739,23 @@ let rec pp_structure_elem table = function
   | (l,SEmodule m) ->
       let typ =
         (* virtual printing of the type, in order to have a correct mli later*)
-        if Common.get_phase () == Pre then
+        if Common.State.get_phase table == Pre then
           str ": " ++ pp_module_type table [] m.ml_mod_type
         else mt ()
       in
       let def = pp_module_expr table [] m.ml_mod_expr in
-      let name = pp_modname table (MPdot (top_visible_mp (), l)) in
+      let name = pp_modname table (MPdot (State.get_top_visible_mp table, l)) in
       hov 1
         (str "module " ++ name ++ typ ++ str " =" ++
          (if is_short m.ml_mod_expr then spc () else fnl ()) ++ def) ++
-      (match Common.get_duplicate (top_visible_mp ()) l with
+      (match Common.State.get_duplicate table (State.get_top_visible_mp table) l with
        | Some ren -> fnl () ++ str ("module "^ren^" = ") ++ name
        | None -> mt ())
   | (l,SEmodtype m) ->
       let def = pp_module_type table [] m in
-      let name = pp_modname table (MPdot (top_visible_mp (), l)) in
+      let name = pp_modname table (MPdot (State.get_top_visible_mp table, l)) in
       hov 1 (str "module type " ++ name ++ str " =" ++ fnl () ++ def) ++
-      (match Common.get_duplicate (top_visible_mp ()) l with
+      (match Common.State.get_duplicate table (State.get_top_visible_mp table) l with
        | None -> mt ()
        | Some ren -> fnl () ++ str ("module type "^ren^" = ") ++ name)
 
@@ -764,18 +766,18 @@ and pp_module_expr table params = function
   | MEfunctor (mbid, mt, me) ->
       let name = pp_modname table (MPbound mbid) in
       let typ = pp_module_type table [] mt in
-      let def = pp_module_expr table (MPbound mbid :: params) me in
+      let def = pp_module_expr table (mbid :: params) me in
       str "functor (" ++ name ++ str ":" ++ typ ++ str ") ->" ++ fnl () ++ def
   | MEstruct (mp, sel) ->
-      push_visible mp params;
-      let try_pp_structure_elem l x =
-        let px = pp_structure_elem table x in
-        if Pp.ismt px then l else px::l
-      in
-      (* We cannot use fold_right here due to side effects in pp_structure_elem *)
-      let l = List.fold_left try_pp_structure_elem [] sel in
-      let l = List.rev l in
-      pop_visible ();
+      let l = State.with_visibility table mp params begin fun table ->
+        let try_pp_structure_elem l x =
+          let px = pp_structure_elem table x in
+          if Pp.ismt px then l else px::l
+        in
+        (* We cannot use fold_right here due to side effects in pp_structure_elem *)
+        let l = List.fold_left try_pp_structure_elem [] sel in
+        List.rev l
+      end in
       str "struct" ++ fnl () ++
       (if List.is_empty l then mt ()
        else
@@ -791,26 +793,40 @@ let rec prlist_sep_nonempty sep f = function
      if Pp.ismt e then r
      else e ++ sep () ++ r
 
-let do_struct f s =
-  let ppl (mp,sel) =
-    push_visible mp [];
-    let p = prlist_sep_nonempty cut2 f sel in
+let do_struct table f s =
+  let modular = State.get_modular table in
+  let p =
     (* for monolithic extraction, we try to simulate the unavailability
        of [MPfile] in names by artificially nesting these [MPfile] *)
-    (if modular () then pop_visible ()); p
+    if modular then
+      let ppl (mp, sel) = State.with_visibility table mp [] begin fun table ->
+        prlist_sep_nonempty cut2 (fun s -> f table s) sel
+      end in
+      List.map_left ppl s
+    else
+      let rec eval table = function
+      | [] -> []
+      | (mp, sel) :: l ->
+        State.with_visibility table mp [] begin fun table ->
+          let h = prlist_sep_nonempty cut2 (fun s -> f table s) sel in
+          h :: eval table l
+        end
+      in
+      eval table s
   in
-  let p = prlist_sep_nonempty cut2 ppl s in
-  (if not (modular ()) then repeat (List.length s) pop_visible ());
+  let p = prlist_sep_nonempty cut2 (fun x -> x) p in
   v 0 p ++ fnl ()
 
-let pp_struct table s = do_struct (fun e -> pp_structure_elem table e) s
+let pp_struct table s = do_struct table (fun table e -> pp_structure_elem table e) s
 
-let pp_signature table s = do_struct (fun e -> pp_specif table e) s
+let pp_signature table s = do_struct table (fun table e -> pp_specif table e) s
+
+let file_naming state mp = file_of_modfile (State.get_table state) mp
 
 let ocaml_descr = {
   keywords = keywords;
   file_suffix = ".ml";
-  file_naming = file_of_modfile;
+  file_naming = file_naming;
   preamble = preamble;
   pp_struct = pp_struct;
   sig_suffix = Some ".mli";

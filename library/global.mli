@@ -23,6 +23,7 @@ val env : unit -> Environ.env
 
 val universes : unit -> UGraph.t
 val qualities : unit -> Sorts.QVar.Set.t
+val elim_graph : unit -> QGraph.t
 val named_context_val : unit -> Environ.named_context_val
 val named_context : unit -> Constr.named_context
 
@@ -56,8 +57,6 @@ val add_constant :
   ?typing_flags:typing_flags ->
   Id.t -> Entries.constant_entry -> Constant.t
 val fill_opaque : Safe_typing.opaque_certificate -> unit
-val add_private_constant :
-  Id.t -> Univ.ContextSet.t -> Safe_typing.side_effect_declaration -> Constant.t * Safe_typing.private_constants
 val add_rewrite_rules : Id.t -> rewrite_rules_body -> unit
 val add_mind :
   ?typing_flags:typing_flags ->
@@ -70,7 +69,7 @@ val add_constraints : Univ.Constraints.t -> unit
 val push_context_set : Univ.ContextSet.t -> unit
 
 (** Extra sort qualities *)
-val push_quality_set : Sorts.QVar.Set.t -> unit
+val push_qualities : Sorts.QVar.Set.t -> unit
 
 (** Non-interactive modules and module types *)
 
@@ -121,7 +120,7 @@ val end_modtype : Summary.Interp.frozen -> Id.t -> ModPath.t * MBId.t list
 
 val add_module_parameter :
   MBId.t -> Entries.module_struct_entry -> inline ->
-    Mod_subst.delta_resolver
+    module_type_body
 
 (** {6 Queries in the global environment } *)
 
@@ -134,7 +133,7 @@ val lookup_pinductive : Constr.pinductive ->
 val lookup_mind      : MutInd.t -> mutual_inductive_body
 val lookup_module    : ModPath.t -> module_body
 val lookup_modtype   : ModPath.t -> module_type_body
-val exists_objlabel  : Label.t -> bool
+val exists_objlabel  : Id.t -> bool
 
 val constant_of_delta_kn : KerName.t -> Constant.t
 val mind_of_delta_kn : KerName.t -> MutInd.t
@@ -202,6 +201,12 @@ val current_modpath : unit -> ModPath.t
 
 val current_dirpath : unit -> DirPath.t
 
-val with_global : (Environ.env -> DirPath.t -> 'a Univ.in_universe_context_set) -> 'a
-
 val global_env_summary_tag : Safe_typing.safe_environment Summary.Dyn.tag
+
+module Internal :
+sig
+
+val reset_safe_env : Safe_typing.safe_environment -> unit
+(** Only use for manipulation of private constants *)
+
+end

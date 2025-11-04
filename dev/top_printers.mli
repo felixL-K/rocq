@@ -18,7 +18,6 @@ val pp_as_format : Pp.t -> unit
 val ppfuture : 'a Future.computation -> unit
 
 val ppid : Names.Id.t -> unit
-val pplab : Names.Label.t -> unit
 val ppmbid : Names.MBId.t -> unit
 val ppdir : Names.DirPath.t -> unit
 val ppmp : Names.ModPath.t -> unit
@@ -77,8 +76,8 @@ val ppidmapgen : 'a Names.Id.Map.t -> unit
 val printmapgen : 'a Int.Map.t -> Pp.t
 val ppintmapgen : 'a Int.Map.t -> unit
 
-val ppmpmapgen : 'a Names.MPmap.t -> unit
-val ppdpmapgen : 'a Names.DPmap.t -> unit
+val ppmpmapgen : 'a Names.ModPath.Map.t -> unit
+val ppdpmapgen : 'a Names.DirPath.Map.t -> unit
 val ppconmapenvgen : 'a Names.Cmap_env.t -> unit
 val ppmindmapenvgen : 'a Names.Mindmap_env.t -> unit
 
@@ -155,6 +154,7 @@ val prlev : Univ.Level.t -> Pp.t (* with global names (does this work?) *)
 val ppqvarset : Sorts.QVar.Set.t -> unit
 val ppuniverse_set : Univ.Level.Set.t -> unit
 val ppuniverse_instance : UVars.Instance.t -> unit
+val ppuniverse_einstance : EConstr.EInstance.t -> unit
 val ppuniverse_context : UVars.UContext.t -> unit
 val ppaucontext : UVars.AbstractContext.t -> unit
 val ppuniverse_context_set : Univ.ContextSet.t -> unit
@@ -164,6 +164,7 @@ val ppqvar_subst : Sorts.Quality.t Sorts.QVar.Map.t -> unit
 val ppuniverse_level_subst : Univ.universe_level_subst -> unit
 val ppustate : UState.t -> unit
 val ppconstraints : Univ.Constraints.t -> unit
+val ppqconstraints : Sorts.ElimConstraints.t -> unit
 val ppuniverseconstraints : UnivProblem.Set.t -> unit
 val ppuniverse_context_future : UVars.UContext.t Future.computation -> unit
 val ppuniverses : UGraph.t -> unit

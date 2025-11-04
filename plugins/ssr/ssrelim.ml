@@ -171,7 +171,7 @@ let find_eliminator env sigma ~concl ~is_case ?elim oc c_gen =
     let elimty =
       let rename_elimty r =
         EConstr.of_constr
-          (Arguments_renaming.rename_type
+          (Arguments_renaming.rename_type env
             (EConstr.to_constr ~abort_on_undefined_evars:false sigma
               elimty) r) in
       match EConstr.kind sigma elim with
@@ -205,7 +205,7 @@ let find_eliminator env sigma ~concl ~is_case ?elim oc c_gen =
     let sigma, elim, elimty =
       if not is_case then
         let sigma, elim = Evd.fresh_global env sigma
-            (Indrec.lookup_eliminator env (kn,i) (EConstr.ESorts.quality_or_set sigma sort))
+            (Elimschemes.lookup_eliminator env (kn,i) (EConstr.ESorts.quality_or_set sigma sort))
         in
         let elimty = Retyping.get_type_of env sigma elim in
         sigma, elim, elimty
@@ -224,7 +224,7 @@ let find_eliminator env sigma ~concl ~is_case ?elim oc c_gen =
           Array.mapi (fun j (ctx, cty) ->
             let t = Term.it_mkProd_or_LetIn cty ctx in
                   debug_ssr (fun () -> Pp.(str "Search" ++ Printer.pr_constr_env env sigma t));
-            let t = Arguments_renaming.rename_type t
+            let t = Arguments_renaming.rename_type env t
               (GlobRef.ConstructRef((kn,i),j+1)) in
             debug_ssr (fun () -> Pp.(str"Done Search " ++ Printer.pr_constr_env env sigma t));
               t)

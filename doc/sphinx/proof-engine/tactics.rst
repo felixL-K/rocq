@@ -1,51 +1,6 @@
-.. _tactics:
-
-Tactics
-========
-
-Tactics specify how to transform the :term:`proof state` of an
-incomplete proof to eventually generate a complete proof.
-
-Proofs can be developed in two basic ways: In :gdef:`forward reasoning`,
-the proof begins by proving simple statements that are then combined to prove the
-theorem statement as the last step of the proof. With forward reasoning,
-for example,
-the proof of `A /\\ B` would begin with proofs of `A` and `B`, which are
-then used to prove `A /\\ B`.  Forward reasoning is probably the most common
-approach in human-generated proofs.
-
-In :gdef:`backward reasoning`, the proof begins with the theorem statement
-as the goal, which is then gradually transformed until every subgoal generated
-along the way has been proven.  In this case, the proof of `A /\\ B` begins
-with that formula as the goal.  This can be transformed into two subgoals,
-`A` and `B`, followed by the proofs of `A` and `B`.  Rocq and its tactics
-primarily use backward reasoning.
-
-A tactic may fully prove a goal, in which case the goal is removed
-from the proof state.
-More commonly, a tactic replaces a goal with one or more :term:`subgoals <subgoal>`.
-(We say that a tactic reduces a goal to its subgoals.)
-
-Most tactics require specific elements or preconditions to reduce a goal;
-they display error messages if they can't be applied to the goal.
-A few tactics, such as :tacn:`auto`, don't fail even if the proof state
-is unchanged.
-
-Goals are identified by number. The current goal is number
-1. Tactics are applied to the current goal by default.  (The
-default can be changed with the :opt:`Default Goal Selector`
-option.)  They can
-be applied to another goal or to multiple goals with a
-:ref:`goal selector <goal-selectors>` such as :n:`2: @tactic`.
-
-This chapter describes many of the most common built-in tactics.
-Built-in tactics can be combined to form tactic expressions, which are
-described in the :ref:`Ltac` chapter.  Since tactic expressions can
-be used anywhere that a built-in tactic can be used, "tactic" may
-refer to both built-in tactics and tactic expressions.
-
+==========================
 Common elements of tactics
---------------------------
+==========================
 
 Reserved keywords
 ~~~~~~~~~~~~~~~~~
@@ -598,16 +553,26 @@ one or more of its hypotheses.
    :ref:`Managingthelocalcontext`, :ref:`caseanalysisandinduction`,
    :ref:`printing_constructions_full`.
 
+Automatic clearing of hypotheses
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. flag:: Default Clearing Used Hypotheses
+
+   When this :term:`flag` is on (it is off by default), some tactics
+   will automatically clear their hypothesis arguments.
+
+   For instance when `H` is an hypothesis, `apply H` will clear `H`.
 
 .. _applyingtheorems:
 
+=================
 Applying theorems
----------------------
+=================
 
 .. tacn:: exact @one_term
 
    Directly gives the exact proof term for the goal.
-   ``exact p`` succeeds if and only if :n:`@one_term` and the type of ``p`` are
+   ``exact p`` succeeds if and only if the goal and the type of ``p`` are
    unifiable (see :ref:`Conversion-rules`).
 
    .. exn:: Not an exact proof.
@@ -1101,8 +1066,9 @@ Applying theorems
 
 .. _managingthelocalcontext:
 
+==========================
 Managing the local context
-------------------------------
+==========================
 
 .. tacn:: intro {? @ident } {? @where }
 
@@ -1462,12 +1428,13 @@ Managing the local context
    this section.  But maybe hard to make the section seem like an crisp, intuitive grouping.
    I can do the moving that after we've reviewed all the text.  WDYT?
 
-   See https://github.com/coq/coq/pull/16498#discussion_r989928078
+   See https://github.com/rocq-prover/rocq/pull/16498#discussion_r989928078
 
 .. _controllingtheproofflow:
 
+==========================
 Controlling the proof flow
-------------------------------
+==========================
 
 .. tacn:: assert ( @ident : @type ) {? by @ltac_expr3 }
           assert ( @ident := @term )
@@ -1850,8 +1817,9 @@ Controlling the proof flow
    then required to prove that False is indeed provable in the current
    context.
 
+=================
 Classical tactics
------------------
+=================
 
 In order to ease the proving process, when the ``Classical`` module is
 loaded, a few more tactics are available. Make sure to load the module
@@ -1867,8 +1835,9 @@ using the :cmd:`Require Import` command.
    Use :tacn:`classical_right` to prove the right part of the disjunction with
    the assumption that the negation of left part holds.
 
+====================================
 Performance-oriented tactic variants
-------------------------------------
+====================================
 
 .. todo: move the following adjacent to the `exact` tactic?
 

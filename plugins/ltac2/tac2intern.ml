@@ -22,13 +22,14 @@ open Tac2typing_env
 
 (** Hardwired types and constants *)
 
-let rocq_type n = KerName.make Tac2env.rocq_prefix (Label.make n)
+let rocq_type n = KerName.make Tac2env.rocq_prefix (Id.of_string n)
 
 let t_int = rocq_type "int"
 let t_string = rocq_type "string"
 let t_constr = rocq_type "constr"
 let t_preterm = rocq_type "preterm"
 let t_pattern = rocq_type "pattern"
+let t_ident = rocq_type "ident"
 let t_bool = rocq_type "bool"
 
 let ltac2_env : Tac2typing_env.t Genintern.Store.field =
@@ -206,9 +207,7 @@ let get_constructor env var = match var with
 | RelId qid ->
   let c = try Some (Tac2env.locate_constructor qid) with Not_found -> None in
   begin match c with
-  | Some knc ->
-    Tac2env.constructor_user_warn knc ;
-    Other knc
+  | Some knc -> Other knc
   | None ->
     CErrors.user_err ?loc:qid.CAst.loc (str "Unbound constructor " ++ pr_qualid qid)
   end
@@ -298,8 +297,8 @@ let is_user_name qid = match qid with
 
 let deprecated_ltac2_alias =
   Deprecation.create_warning
-    ~object_name:"Ltac2 alias"
-    ~warning_name_if_no_since:"deprecated-ltac2-alias"
+    ~object_name:"Ltac2 abbreviation"
+    ~warning_name_if_no_since:"deprecated-ltac2-abbreviation"
     (fun kn -> pr_qualid (Tac2env.shortest_qualid_of_ltac Id.Set.empty (TacAlias kn)))
 
 let deprecated_ltac2_def =
@@ -494,7 +493,14 @@ let rec intern_pat_rec env cpat t =
             true)
             patvars patvars')
         (* TODO say what variables are differently bound *)
-        then CErrors.user_err ?loc Pp.(str "These patterns do not bind the same variables.");
+        then begin
+          let leftdom = Id.Map.domain patvars in
+          let rightdom = Id.Map.domain patvars' in
+          let only_left = Id.Set.diff leftdom rightdom in
+          let only_right = Id.Set.diff rightdom leftdom in
+          let pp_side side vars () = if Id.Set.is_empty vars then mt() else Pp.fmt "@ (%s pattern also binds %t)" side (fun () -> Pp.pr_enum Id.print (Id.Set.elements vars)) in
+          CErrors.user_err ?loc Pp.(fmt "These patterns do not bind the same variables%t%t." (pp_side "left" only_left) (pp_side "right" only_right))
+        end;
         pat)
         rest
     in
@@ -1043,14 +1049,14 @@ let to_simple_case env ?loc (e,t) pl =
         in
         let ids = List.map get args in
         let map =
-          if KNmap.mem knc map then
+          if KerName.Map.mem knc map then
             map
           else
-            KNmap.add knc (Anonymous, Array.of_list ids, br) map
+            KerName.Map.add knc (Anonymous, Array.of_list ids, br) map
         in
         intern_branch map rem
     in
-    let (map, def) = intern_branch KNmap.empty pl in
+    let (map, def) = intern_branch KerName.Map.empty pl in
     GTacWth { opn_match = e; opn_branch = map; opn_default = def }
 
 let check ?loc env tycon (e,t as et) =
@@ -1873,9 +1879,9 @@ let rec subst_expr subst e = match e with
     let kn' = subst_kn subst kn in
     let p' = subst_expr subst p in
     if kn' == kn && p' == p then accu
-    else KNmap.add kn' (self, vars, p') (KNmap.remove kn accu)
+    else KerName.Map.add kn' (self, vars, p') (KerName.Map.remove kn accu)
   in
-  let br' = KNmap.fold fold br br in
+  let br' = KerName.Map.fold fold br br in
   if e' == e && br' == br && def' == def then e0
   else GTacWth { opn_match = e'; opn_default = (na, def'); opn_branch = br' }
 | GTacFullMatch (e,brs) as e0 ->
@@ -2147,6 +2153,7 @@ let intern_var_quotation_gen ~ispat ist (kind, { CAst.v = id; loc }) =
       | "constr" -> ConstrVar
       | "preterm" -> PretermVar
       | "pattern" -> PatternVar
+      | "hyp" -> HypVar
       | _ ->
         CErrors.user_err ?loc:kind.loc
           Pp.(str "Unknown Ltac2 variable quotation kind" ++ spc() ++ Id.print kind.v)
@@ -2164,6 +2171,11 @@ let intern_var_quotation_gen ~ispat ist (kind, { CAst.v = id; loc }) =
       if not ispat
       then CErrors.user_err ?loc Pp.(str "pattern quotations not supported outside tactic patterns.")
       else t_pattern
+    | HypVar ->
+      (* XXX allow this? *)
+      if ispat
+      then CErrors.user_err ?loc Pp.(str "hyp quotations not supported in tactic patterns.")
+      else t_ident
   in
   let env = match Genintern.Store.get ist.extra ltac2_env with
     | None ->

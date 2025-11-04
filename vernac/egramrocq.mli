@@ -18,8 +18,8 @@
 val extend_constr_grammar : Notation_gram.one_notation_grammar -> unit
 (** Add a term notation rule to the parsing system. *)
 
-val create_custom_entry : local:bool -> string -> unit
+val find_custom_entry : Globnames.CustomName.t ->
+  Constrexpr.constr_expr Procq.Entry.t * Constrexpr.cases_pattern_expr Procq.Entry.t
 
-val exists_custom_entry : string -> bool
-
-val locality_of_custom_entry : string -> bool
+val create_custom_entry : Globnames.CustomName.t -> unit
+(** Add the entry to the grammar. *)

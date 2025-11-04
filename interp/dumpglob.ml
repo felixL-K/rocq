@@ -12,31 +12,66 @@ open Util
 
 (* Dump of globalization (to be used by coqdoc) *)
 
-let glob_file = ref stdout
-
-let open_glob_file f =
-  glob_file := open_out f
-
-let close_glob_file () =
-  close_out !glob_file
+type glob_file = { vfile : string; vofile : string }
 
 type glob_output =
   | NoGlob
   | Feedback
-  | MultFiles
+  | MultFiles of glob_file
   | File of string
+
+module Cache :
+sig
+  type t
+  val make : unit -> t
+  val with_cache : t -> string -> (string -> unit) -> unit
+end =
+struct
+  type t = String.Set.t ref
+  let make () = ref String.Set.empty
+  let with_cache cache data f =
+    if String.Set.mem data !cache then ()
+    else
+      let () = cache := String.Set.add data !cache in
+      f data
+end
+
+type glob_state =
+  | StNoGlob
+  | StFeedback
+  | StChannel of { chan : out_channel; cache : Cache.t }
 
 let glob_output = ref []
 
 let get_output () = match !glob_output with
-  | [] -> NoGlob
+  | [] -> StNoGlob
   | g::_ -> g
 
-let push_output g = glob_output := g::!glob_output
+let push_output g =
+  let g = match g with
+  | NoGlob -> StNoGlob
+  | Feedback -> StFeedback
+  | MultFiles { vofile; vfile } ->
+    let ch = open_out (Filename.chop_extension vofile ^ ".glob") in
+    let () = output_string ch "DIGEST " in
+    let () = output_string ch (Digest.to_hex (Digest.file vfile)) in
+    let () = output_char ch '\n' in
+    StChannel { chan = ch; cache = Cache.make () }
+  | File f ->
+    let ch = open_out f in
+    let () = output_string ch "DIGEST NO\n" in
+    StChannel { chan = ch; cache = Cache.make () }
+  in
+  glob_output := g :: !glob_output
 
-let pop_output () = glob_output := match !glob_output with
-    | [] -> CErrors.anomaly (Pp.str "No output left to pop")
-    | _::ds -> ds
+let pop_output () = match !glob_output with
+| [] -> CErrors.anomaly (Pp.str "No output left to pop")
+| hd :: ds ->
+  let () = match hd with
+  | StNoGlob | StFeedback -> ()
+  | StChannel ch -> close_out ch.chan
+  in
+  glob_output := ds
 
 let pause () = push_output NoGlob
 let continue = pop_output
@@ -52,29 +87,11 @@ let with_glob_output g f () =
     pop_output ();
     Exninfo.iraise reraise
 
-let dump () = get_output () <> NoGlob
+let dump () = get_output () <> StNoGlob
 
-let dump_string s =
-  if dump () && get_output () != Feedback then
-    output_string !glob_file s
-
-let start_dump_glob ~vfile ~vofile =
-  match get_output () with
-  | MultFiles ->
-      open_glob_file (Filename.chop_extension vofile ^ ".glob");
-      output_string !glob_file "DIGEST ";
-      output_string !glob_file (Digest.to_hex (Digest.file vfile));
-      output_char !glob_file '\n'
-  | File f ->
-      open_glob_file f;
-      output_string !glob_file "DIGEST NO\n"
-  | NoGlob | Feedback ->
-      ()
-
-let end_dump_glob () =
-  match get_output () with
-  | MultFiles | File _ -> close_glob_file ()
-  | NoGlob | Feedback -> ()
+let dump_string s = match get_output () with
+| StNoGlob | StFeedback -> ()
+| StChannel ch -> output_string ch.chan s
 
 open Decls
 open Declarations
@@ -120,7 +137,7 @@ let add_constant_kind kn k = csttab := Names.Cmap.add kn k !csttab
 let constant_kind kn = Names.Cmap.find kn !csttab
 
 let type_of_global_ref gr =
-  if Typeclasses.is_class gr then
+  if Typeclasses.is_class (Global.env ()) gr then
     "class"
   else
     let open Names.GlobRef in
@@ -133,7 +150,7 @@ let type_of_global_ref gr =
       "var" ^ type_of_logical_kind knd
     | IndRef ind ->
         let (mib,oib) = Inductive.lookup_mind_specif (Global.env ()) ind in
-          if mib.Declarations.mind_record <> Declarations.NotRecord then
+          if oib.Declarations.mind_record <> Declarations.NotRecord then
             begin match mib.Declarations.mind_finite with
             | Finite -> "indrec"
             | BiFinite -> "rec"
@@ -162,15 +179,16 @@ let interval loc =
 
 let dump_ref ?loc filepath modpath ident ty =
   match get_output () with
-  | Feedback ->
+  | StFeedback ->
     Option.iter (fun loc ->
         Feedback.feedback (Feedback.GlobRef (loc, filepath, modpath, ident, ty))
       ) loc
-  | NoGlob -> ()
-  | _ -> Option.iter (fun loc ->
-    let bl,el = interval loc in
-    dump_string (Printf.sprintf "R%d:%d %s %s %s %s\n"
-                  bl el filepath modpath ident ty)
+  | StNoGlob -> ()
+  | StChannel ch ->
+    Option.iter (fun loc ->
+      let bl, el = interval loc in
+      let payload = Printf.sprintf "R%d:%d %s %s %s %s\n" bl el filepath modpath ident ty in
+      Cache.with_cache ch.cache payload dump_string
     ) loc
 
 let dump_reference ?loc modpath ident ty =
@@ -227,7 +245,12 @@ let cook_notation (from,df) sc =
   done;
   let df = Bytes.sub_string ntn 0 !j in
   let df_sc = match sc with Some sc -> ":" ^ sc ^ ":" ^ df | _ -> "::" ^ df in
-  let from_df_sc = match from with Constrexpr.InCustomEntry from -> ":" ^ from ^ df_sc | Constrexpr.InConstrEntry -> ":" ^ df_sc in
+  let from_df_sc = match from with
+    | Constrexpr.InCustomEntry from ->
+      let sp = Nametab.CustomEntries.to_path from in
+      ":" ^ Libnames.string_of_path sp ^ df_sc
+    | Constrexpr.InConstrEntry -> ":" ^ df_sc
+  in
   from_df_sc
 
 let dump_notation_location posl df (((path,secpath),_),sc) =
@@ -267,7 +290,7 @@ let add_glob_kn ?loc kn =
     add_glob_gen ?loc sp lib_dp "abbrev"
 
 let dump_def ?loc ty secpath id = Option.iter (fun loc ->
-  if get_output () = Feedback then
+  if get_output () = StFeedback then
     Feedback.feedback (Feedback.GlobDef (loc, id, secpath, ty))
   else
     let bl,el = interval loc in

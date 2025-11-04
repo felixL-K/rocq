@@ -280,7 +280,7 @@ let check_positivity_one ~chkpos recursive (env,_,ntypes,_ as ienv) paramsctxt (
       if chkpos && not (List.for_all (noccur_between n ntypes) auxnonrecargs) then
         failwith_non_pos_list n ntypes auxnonrecargs;
       (* Nested mutual inductive types are not supported *)
-      let auxntyp = mib.mind_ntypes in
+      let auxntyp = Declareops.mind_ntypes mib in
         if not (Int.equal auxntyp 1) then raise (IllFormedInd (LocalNonPos n));
         (* The nested inductive type with parameters removed *)
         let auxlcvect = abstract_mind_lc auxntyp auxnrecpar mind mip.mind_nf_lc in
@@ -413,16 +413,15 @@ let rel_vect n m = Array.init m (fun i -> mkRel(n+m-i))
     build an expansion function.
     The term built is expecting to be substituted first by
     a substitution of the form [params, x : ind params] *)
-let compute_projections (_, i as ind) mib =
-  let pkt = mib.mind_packets.(i) in
-  let (ctx, _) = pkt.mind_nf_lc.(0) in
-  let ctx, paramslet = List.chop pkt.mind_consnrealdecls.(0) ctx in
+let compute_projections ind ~nparamargs ~nf_lc ~consnrealdecls =
+  let (ctx, _) = nf_lc.(0) in
+  let ctx, paramslet = List.chop consnrealdecls.(0) ctx in
   (** We build a substitution smashing the lets in the record parameters so
       that typechecking projections requires just a substitution and not
       matching with a parameter context. *)
   let paramsletsubst =
     (* [Ind inst] is typed in context [params-wo-let] *)
-    let inst' = rel_vect 0 mib.mind_nparams in
+    let inst' = rel_vect 0 nparamargs in
     (* {params-wo-let |- subst:params] *)
     let subst = subst_of_rel_context_instance paramslet inst' in
     (* {params-wo-let, x:Ind inst' |- subst':(params,x:Ind inst)] *)
@@ -447,8 +446,7 @@ let compute_projections (_, i as ind) mib =
       match na.Context.binder_name with
       | Name id ->
         let r = na.Context.binder_relevance in
-        let lab = Label.of_id id in
-        let kn = Projection.Repr.make ind ~proj_npars:mib.mind_nparams ~proj_arg:i lab in
+        let kn = Projection.Repr.make ind ~proj_npars:nparamargs ~proj_arg:i id in
         (* from [params, field1,..,fieldj |- t(params,field1,..,fieldj)]
            to [params, x:I, field1,..,fieldj |- t(params,field1,..,fieldj] *)
         let t = liftn 1 j t in
@@ -458,7 +456,7 @@ let compute_projections (_, i as ind) mib =
         (* from [params, x:I, field1,..,fieldj |- t(field1,..,fieldj)]
            to [params, x:I |- t(proj1 x,..,projj x)] *)
         let fterm = mkProj (Projection.make kn false, r, mkRel 1) in
-        (i + 1, j + 1, lab :: labs, r :: rs, projty :: pbs, fterm :: letsubst)
+        (i + 1, j + 1, id :: labs, r :: rs, projty :: pbs, fterm :: letsubst)
       | Anonymous -> assert false (* checked by indTyping *)
   in
   let (_, _, labs, rs, pbs, _letsubst) =
@@ -477,7 +475,7 @@ let build_inductive env ~sec_univs names prv univs template variance
   let u = UVars.make_abstract_instance (universes_context univs) in
   let subst = List.init ntypes (fun i -> mkIndU ((kn, ntypes - i - 1), u)) in
   (* Check one inductive *)
-  let build_one_packet (id,cnames) ((arity,lc),(indices,splayed_lc),squashed) recarg =
+  let build_one_packet i (id,cnames) ((arity,lc),(indices,splayed_lc),squashed) recarg =
     let lc = Array.map (substl subst) lc in
     (* Type of constructors in normal form *)
     let nf_lc =
@@ -491,6 +489,17 @@ let build_inductive env ~sec_univs names prv univs template variance
       Array.map (fun (d,_) -> Context.Rel.nhyps d)
         splayed_lc in
     let mind_relevance = Sorts.relevance_of_sort arity.IndTyping.sort in
+    let mind_record = match isrecord with
+      | Some (Some rid) ->
+        (** The elimination criterion ensures that all projections can be defined. *)
+        let data =
+          let labs, rs, projs = compute_projections (kn, i) ~nparamargs ~nf_lc ~consnrealdecls in
+          (rid.(i), labs, rs, projs)
+        in
+        PrimRecord data
+      | Some None -> FakeRecord
+      | None -> NotRecord
+    in
     (* Assigning VM tags to constructors *)
     let nconst, nblock = ref 0, ref 0 in
     let transf arity =
@@ -506,6 +515,7 @@ let build_inductive env ~sec_univs names prv univs template variance
     let rtbl = Array.map transf consnrealargs in
       (* Build the inductive packet *)
       { mind_typename = id;
+        mind_record;
         mind_user_arity = arity.IndTyping.user_arity;
         mind_sort = arity.IndTyping.sort;
         mind_arity_ctxt = indices @ paramsctxt;
@@ -523,7 +533,7 @@ let build_inductive env ~sec_univs names prv univs template variance
         mind_nb_args = !nblock;
         mind_reloc_tbl = rtbl;
       } in
-  let packets = Array.map3 build_one_packet names inds recargs in
+  let packets = Array.map3_i build_one_packet names inds recargs in
   let variance, sec_variance = match variance with
     | None -> None, None
     | Some variance -> match sec_univs with
@@ -538,37 +548,21 @@ let build_inductive env ~sec_univs names prv univs template variance
     | None -> UVars.Instance.empty
     | Some univs -> univs
   in
-  let mib =
-      (* Build the mutual inductive *)
-    { mind_record = NotRecord;
-      mind_ntypes = ntypes;
-      mind_finite = isfinite;
-      mind_hyps = hyps;
-      mind_univ_hyps = univ_hyps;
-      mind_nparams = nparamargs;
-      mind_nparams_rec = nmr;
-      mind_params_ctxt = paramsctxt;
-      mind_packets = packets;
-      mind_universes = univs;
-      mind_template = template;
-      mind_variance = variance;
-      mind_sec_variance = sec_variance;
-      mind_private = prv;
-      mind_typing_flags = Environ.typing_flags env;
-    }
-  in
-  let record_info = match isrecord with
-  | Some (Some rid) ->
-    (** The elimination criterion ensures that all projections can be defined. *)
-    let map i id =
-      let labs, rs, projs = compute_projections (kn, i) mib in
-      (id, labs, rs, projs)
-    in
-    PrimRecord (Array.mapi map rid)
-  | Some None -> FakeRecord
-  | None -> NotRecord
-  in
-  { mib with mind_record = record_info }
+  (* Build the mutual inductive *)
+  { mind_finite = isfinite;
+    mind_hyps = hyps;
+    mind_univ_hyps = univ_hyps;
+    mind_nparams = nparamargs;
+    mind_nparams_rec = nmr;
+    mind_params_ctxt = paramsctxt;
+    mind_packets = packets;
+    mind_universes = univs;
+    mind_template = template;
+    mind_variance = variance;
+    mind_sec_variance = sec_variance;
+    mind_private = prv;
+    mind_typing_flags = Environ.typing_flags env;
+  }
 
 (************************************************************************)
 (************************************************************************)

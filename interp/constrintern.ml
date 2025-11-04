@@ -603,7 +603,7 @@ let glob_local_binder_of_extended = DAst.with_loc_val (fun ?loc -> function
       let t = DAst.make ?loc @@ GHole (GBinderType na) in
       (na,None,Explicit,Some c,t)
   | GLocalPattern (_,_,_,_) ->
-      Loc.raise ?loc (Gramlib.Grammar.Error "Pattern with quote not allowed here")
+      Loc.raise ?loc (Gramlib.Grammar.ParseError "Pattern with quote not allowed here")
   )
 
 let intern_cases_pattern_fwd = ref (fun _ -> failwith "intern_cases_pattern_fwd")
@@ -1250,7 +1250,7 @@ let intern_qvar ~local_univs = function
     match local with
     | Some u -> GQVar u
     | None ->
-      try GQVar (Sorts.QVar.make_global (Nametab.locate_quality qid))
+      try GQVar (Sorts.QVar.make_global (Nametab.Quality.locate qid))
       with Not_found ->
         if is_id && local_univs.unb_univs
         then GLocalQVar (CAst.make ?loc:qid.loc (Name (qualid_basename qid)))
@@ -1287,7 +1287,7 @@ let intern_field_ref qid =
   match
     Smartlocate.global_of_extended_global (intern_extended_global_of_qualid qid) |>
     Option.map (function
-     | GlobRef.ConstRef c as x -> x, Structure.find_from_projection c
+     | GlobRef.ConstRef c as x -> x, Structure.find_from_projection (Global.env ()) c
      | _ -> raise Not_found)
   with
   | exception Not_found ->
@@ -1299,7 +1299,7 @@ let intern_field_ref qid =
 (**********************************************************************)
 (* Interpreting references                                            *)
 
-let find_appl_head_data env (_,ntnvars) c =
+let find_appl_head_data genv env (_,ntnvars) c =
   let loc = c.CAst.loc in
   match DAst.get c with
   | GVar id when not (Id.Map.mem id ntnvars) ->
@@ -1309,14 +1309,14 @@ let find_appl_head_data env (_,ntnvars) c =
      with Not_found -> None, [], [])
   | GRef (ref,_) ->
     let impls = implicits_of_global ref in
-    let scopes = find_arguments_scope ref in
+    let scopes = find_arguments_scope genv ref in
     Some (CAst.make ?loc ref), impls, scopes
   | GApp (r, l) ->
     begin match DAst.get r with
     | GRef (ref,_) ->
       let n = List.length l in
       let impls = implicits_of_global ref in
-      let scopes = find_arguments_scope ref in
+      let scopes = find_arguments_scope genv ref in
       Some (CAst.make ?loc ref),
       (if n = 0 then [] else List.map (drop_first_implicits n) impls),
        List.skipn_at_best n scopes
@@ -1326,7 +1326,7 @@ let find_appl_head_data env (_,ntnvars) c =
       let ref = GlobRef.ConstRef cst in
       let n = List.length l + 1 in
       let impls = implicits_of_global ref in
-      let scopes = find_arguments_scope ref in
+      let scopes = find_arguments_scope genv ref in
       Some (CAst.make ?loc (GlobRef.ConstRef cst)),
       List.map (drop_first_implicits n) impls,
       List.skipn_at_best n scopes
@@ -1348,10 +1348,10 @@ let find_projection_data c =
   match DAst.get c with
   | GApp (r, l) ->
     begin match DAst.get r with
-    | GRef (GlobRef.ConstRef cst,us) -> Some (cst, us, l, Structure.projection_nparams cst - List.length l)
+    | GRef (GlobRef.ConstRef cst,us) -> Some (cst, us, l, Structure.projection_nparams (Global.env ()) cst)
     | _ -> None
     end
-  | GRef (GlobRef.ConstRef cst,us) -> Some (cst, us, [], Structure.projection_nparams cst)
+  | GRef (GlobRef.ConstRef cst,us) -> Some (cst, us, [], Structure.projection_nparams (Global.env ()) cst)
   | _ -> None
 
 let glob_sort_of_level (level: glob_level) : glob_sort =
@@ -1368,7 +1368,7 @@ let intern_qualid ?(no_secvar=false) qid intern env ntnvars us args =
       raise Not_found
   | TrueGlobal ref -> (DAst.make ?loc @@ GRef (ref, us)), Some ref, args
   | Abbrev sp ->
-      let (ids,c) = Abbreviation.search_abbreviation sp in
+      let (ids,c) = Abbreviation.find_interp sp in
       let nids = List.length ids in
       if List.length args < nids then error_not_enough_arguments ?loc;
       let args1,args2 = List.chop nids args in
@@ -1430,7 +1430,10 @@ let intern_qualid_for_pattern test_global intern_not qid pats =
         let args = List.map (intern_not subst) args in
         Some (g, Some args, pats2)
       | _ -> None in
-    match Abbreviation.search_filtered_abbreviation filter kn with
+    match Abbreviation.find_opt kn with
+    | None -> raise Not_found
+    | Some abbrev ->
+    match filter (Abbreviation.interp abbrev) with
     | Some (g, pats1, pats2) ->
       Nametab.is_warned_xref xref
       |> Option.iter (fun warn -> Nametab.warn_user_warn_xref ?loc:qid.loc warn (Abbrev kn));
@@ -1820,7 +1823,7 @@ let drop_notations_pattern (test_kind_top,test_kind_inner) genv env pat =
     | GApp (r, l) ->
       begin match DAst.get r with
       | GRef (g,_) ->
-        let allscs = find_arguments_scope g in
+        let allscs = find_arguments_scope genv g in
         let allscs = simple_adjust_scopes (List.length l) allscs in
         let params = make_pars ?loc g in (* Rem: no letins *)
         let nparams = List.length params in
@@ -1948,7 +1951,7 @@ let drop_notations_pattern (test_kind_top,test_kind_inner) genv env pat =
           if Int.equal n 0 then select_impargs_size npats impls_st
           else List.skipn_at_best n (select_stronger_impargs impls_st) in
       adjust_to_down tags imps None in
-    let subscopes = adjust_to_down tags (List.skipn_at_best n (find_arguments_scope gr)) [] in
+    let subscopes = adjust_to_down tags (List.skipn_at_best n (find_arguments_scope genv gr)) [] in
     let has_letin = check_has_letin ?loc gr expanded npats (List.count is_status_implicit imps) tags in
     let rec aux imps subscopes tags pats =
     match imps, subscopes, tags, pats with
@@ -2575,12 +2578,12 @@ let internalize globalenv env pattern_mode (_, ntnvars as lvar) c =
     | Some (p, us, args0, nexpectedparams) ->
       (* A reference registered as projection *)
       check_not_notation_variable f ntnvars;
-      let head, impls, subscopes = find_appl_head_data env lvar f in
+      let head, impls, subscopes = find_appl_head_data globalenv env lvar f in
       let imps1, imps2 =
         if expl then
           [], []
         else
-          let ngivenparams = List.count (fun (_,x) -> Option.is_empty x) args1 in
+          let ngivenparams = List.length args0 + List.count (fun (_,x) -> Option.is_empty x) args1 in
           let nextraargs = List.length args2 in
           match select_impargs_size_for_proj ~nexpectedparams ~ngivenparams ~nextraargs impls with
           | Inl (imps1,imps2) -> (imps1,imps2)
@@ -2590,7 +2593,7 @@ let internalize globalenv env pattern_mode (_, ntnvars as lvar) c =
             user_err ?loc:qid.CAst.loc (str "Projection " ++ pr_qualid qid ++ str " expected " ++ pr_choice int l ++
                            str (String.plural n " explicit parameter") ++ str ".")
       in
-      let subscopes1, subscopes2 = List.chop (nexpectedparams + 1) subscopes in
+      let subscopes1, subscopes2 = try List.chop (nexpectedparams + 1) subscopes with Failure _ -> subscopes, [] in
       let c,args1 = List.sep_last (intern_impargs head env imps1 subscopes1 (args1@[c,None])) in
       let p = DAst.make ?loc (GProj ((p,us),args0@args1,c)) in
       let args2 = intern_impargs head env imps2 subscopes2 args2 in
@@ -2637,7 +2640,7 @@ let internalize globalenv env pattern_mode (_, ntnvars as lvar) c =
     in aux 1 allimps subscopes eargs rargs
 
   and apply_impargs env loc c args =
-    let head, impls, subscopes = find_appl_head_data env lvar c in
+    let head, impls, subscopes = find_appl_head_data globalenv env lvar c in
     let imps = select_impargs_size (List.length (List.filter (fun (_,x) -> x == None) args)) impls in
     let args = intern_impargs head env imps subscopes args in
     smart_gapp c loc args
@@ -2651,7 +2654,7 @@ let internalize globalenv env pattern_mode (_, ntnvars as lvar) c =
       | _ -> DAst.make ?loc:(Loc.merge_opt (loc_of_glob_constr f) loc) @@ GApp (f, l)
 
   and apply_args env loc hd args =
-    let _, _, subscopes = find_appl_head_data env lvar hd in
+    let _, _, subscopes = find_appl_head_data globalenv env lvar hd in
     smart_gapp hd loc (intern_args env subscopes args)
 
   and intern_args env subscopes = function
@@ -2760,31 +2763,29 @@ let interp_type_evars_impls ?(flags=Pretyping.all_no_fail_flags) env sigma ?(imp
 
 (* Not all evars expected to be resolved, with side-effect on evars *)
 
-let interp_constr_evars_gen ?(program_mode=false) env sigma ?(impls=empty_internalization_env) expected_type c =
+let interp_constr_evars_gen ?flags ?(program_mode=false) env sigma ?(impls=empty_internalization_env) expected_type c =
   let c = intern_gen expected_type ~impls env sigma c in
-  let flags = { Pretyping.all_no_fail_flags with program_mode } in
+  let flags = Option.default { Pretyping.all_no_fail_flags with program_mode } flags in
   understand_tcc ~flags env sigma ~expected_type c
 
 let interp_constr_evars ?program_mode env evdref ?(impls=empty_internalization_env) c =
   interp_constr_evars_gen ?program_mode env evdref WithoutTypeConstraint ~impls c
 
-let interp_casted_constr_evars ?program_mode env sigma ?(impls=empty_internalization_env) c typ =
-  interp_constr_evars_gen ?program_mode env sigma ~impls (OfType typ) c
+let interp_casted_constr_evars ?flags ?program_mode env sigma ?(impls=empty_internalization_env) c typ =
+  interp_constr_evars_gen ?flags ?program_mode env sigma ~impls (OfType typ) c
 
 let interp_type_evars ?program_mode env sigma ?(impls=empty_internalization_env) c =
   interp_constr_evars_gen ?program_mode env sigma IsType ~impls c
 
 (* Miscellaneous *)
-
 let intern_constr_pattern env sigma ?(as_type=false) ?strict_check ?(ltacvars=empty_ltac_sign) c =
   let c = intern_gen (if as_type then IsType else WithoutTypeConstraint)
             ?strict_check ~pattern_mode:true ~ltacvars env sigma c in
   pattern_of_glob_constr env c
 
-let intern_uninstantiated_constr_pattern env sigma ?(as_type=false) ?strict_check ?(ltacvars=empty_ltac_sign) c =
-  let c = intern_gen (if as_type then IsType else WithoutTypeConstraint)
-            ?strict_check ~pattern_mode:true ~ltacvars env sigma c in
-  uninstantiated_pattern_of_glob_constr env c
+let interp_constr_pattern env sigma ?as_type ?strict_check c =
+  let ids, pat = intern_constr_pattern env sigma ?as_type ?strict_check c in
+  ids, Patternops.interp_pattern env sigma Glob_ops.empty_lvar pat
 
 let intern_core kind env sigma ?strict_check ?(pattern_mode=false) ?(ltacvars=empty_ltac_sign)
       { Genintern.intern_ids = ids; Genintern.notation_variable_status = vl } c =

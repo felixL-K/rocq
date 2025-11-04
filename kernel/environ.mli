@@ -37,9 +37,9 @@ type link_info =
 
 type key = int CEphemeron.key option ref
 
-type constant_key = constant_body * (link_info ref * key)
+type constant_key = constant_body * (link_info ref * key) * KerName.t
 
-type mind_key = mutual_inductive_body * link_info ref
+type mind_key = mutual_inductive_body * link_info ref * KerName.t
 
 type named_context_val = private {
   env_named_ctx : Constr.named_context;
@@ -75,7 +75,8 @@ val named_context_val : env -> named_context_val
 
 val set_universes : UGraph.t -> env -> env
 
-val qualities : env -> Sorts.QVar.Set.t
+val qualities : env -> QGraph.t
+val qvars : env -> Sorts.QVar.Set.t
 val set_qualities : Sorts.QVar.Set.t -> env -> env
 
 val typing_flags    : env -> typing_flags
@@ -181,8 +182,8 @@ val constant_relevance : Constant.t -> env -> Sorts.relevance
 
 val mem_constant : Constant.t -> env -> bool
 
-val add_rewrite_rules : (Constant.t * rewrite_rule) list -> env -> env
-val lookup_rewrite_rules : Constant.t -> env -> rewrite_rule list
+val add_rewrite_rules : (Constant.t * machine_rewrite_rule) list -> env -> env
+val lookup_rewrite_rules : Constant.t -> env -> machine_rewrite_rule list
 
 (** New-style polymorphism *)
 val polymorphic_constant  : Constant.t -> env -> bool
@@ -200,7 +201,7 @@ type const_evaluation_result =
   | NoBody
   | Opaque
   | IsPrimitive of Instance.t * CPrimitives.t
-  | HasRules of Instance.t * bool * rewrite_rule list
+  | HasRules of Instance.t * bool * machine_rewrite_rule list
 exception NotEvaluableConst of const_evaluation_result
 
 val constant_type : env -> Constant.t puniverses -> types constrained
@@ -241,7 +242,7 @@ val get_projections : env -> inductive -> (Names.Projection.Repr.t * Sorts.relev
 
 (** {5 Inductive types } *)
 val lookup_mind_key : MutInd.t -> env -> mind_key
-val add_mind_key : MutInd.t -> mind_key -> env -> env
+val add_mind_key : MutInd.t -> mutual_inductive_body -> link_info -> env -> env
 val add_mind : MutInd.t -> mutual_inductive_body -> env -> env
 
 (** Looks up in the context of global inductive names
@@ -290,6 +291,29 @@ val instantiate_context : UVars.Instance.t -> Vars.substl -> Name.t binder_annot
 
 (** {6 Name quotients} *)
 
+module type QS =
+sig
+  type t
+  val canonize : env -> t -> t
+end
+
+module type QMapS =
+sig
+  type key
+  type (+'a) t
+  val empty: 'a t
+  val is_empty: 'a t -> bool
+  val mem: env -> key -> 'a t -> bool
+  val add: env -> key -> 'a -> 'a t -> 'a t
+  val remove: env -> key -> 'a t -> 'a t
+  val fold: (key -> 'a -> 'b -> 'b) -> 'a t -> 'b -> 'b
+  val merge: (key -> 'a option -> 'b option -> 'c option) -> 'a t -> 'b t -> 'c t
+  val find: env -> key -> 'a t -> 'a
+  val find_opt : env -> key -> 'a t -> 'a option
+end
+
+module QMap (M : CSig.UMapS) (_ : QS with type t = M.key) : QMapS with type key = M.key
+
 module type QNameS =
 sig
   type t
@@ -299,21 +323,41 @@ sig
   val canonize : env -> t -> t
 end
 
-module QConstant : QNameS with type t = Constant.t
+module QConstant : sig
+  include QNameS with type t = Constant.t
+  module Map : QMapS with type key = t
+end
 
-module QMutInd : QNameS with type t = MutInd.t
+module QMutInd : sig
+  include QNameS with type t = MutInd.t
+  module Map : QMapS with type key = t
+end
 
-module QInd : QNameS with type t = Ind.t
+module QInd : sig
+  include QNameS with type t = Ind.t
+  module Map : QMapS with type key = t
+end
 
-module QConstruct : QNameS with type t = Construct.t
+module QConstruct : sig
+  include QNameS with type t = Construct.t
+  module Map : QMapS with type key = t
+end
 
 module QProjection :
 sig
   include QNameS with type t = Projection.t
-  module Repr : QNameS with type t = Projection.Repr.t
+  module Map : QMapS with type key = t
+
+  module Repr : sig
+    include QNameS with type t = Projection.Repr.t
+    module Map : QMapS with type key = t
+end
 end
 
-module QGlobRef : QNameS with type t = GlobRef.t
+module QGlobRef : sig
+  include QNameS with type t = GlobRef.t
+  module Map : QMapS with type key = t
+end
 
 (** {5 Modules } *)
 
@@ -344,12 +388,9 @@ val push_context_set : ?strict:bool -> ContextSet.t -> env -> env
     universes is already declared. *)
 
 val push_qualities : Sorts.QVar.Set.t -> env -> env
-(** Add the qualities to the environment. Only used in higher layers. *)
-
-val push_quality_set : Sorts.QVar.Set.t -> env -> env
-(** [push_quality_set qs env] pushes the set of quality variables in
-    the environment. It does not fail even if a quality variable is
-    already declared. *)
+(** [push_qualities qs env] pushes the set of quality variables in
+    the environment. It fails if a quality variable is already
+    declared. *)
 
 val push_subgraph : ContextSet.t -> env -> env
 (** [push_subgraph univs env] adds the universes and constraints in
@@ -453,18 +494,32 @@ module Internal : sig
     type t = {
       env_constants : constant_key Cmap_env.t;
       env_inductives : mind_key Mindmap_env.t;
-      env_modules : module_body MPmap.t;
-      env_modtypes : module_type_body MPmap.t;
+      env_modules : module_body ModPath.Map.t;
+      env_modtypes : module_type_body ModPath.Map.t;
       env_named_context : named_context_val;
       env_rel_context   : rel_context_val;
       env_universes : UGraph.t;
       env_qualities : Sorts.QVar.Set.t;
-      env_symb_pats : rewrite_rule list Cmap_env.t;
+      env_symb_pats : machine_rewrite_rule list Cmap_env.t;
       env_typing_flags  : typing_flags;
     }
 
     val view : env -> t
   end
   (** View type only used by Serlib. Do not use otherwise. *)
+
+  val shallow_overwrite_module : ModPath.t -> module_body -> env -> env
+  (** Same as [shallow_add_module] but tolerates that the module is already
+      in the environment. Only used to bypass a dubious implementation in
+      extraction, do not use. *)
+
+  val overwrite_module : ModPath.t -> module_body -> env -> env
+  (** Overwriting variant of Modops.add_module, see above. *)
+
+  val overwrite_module_parameter : MBId.t -> module_type_body -> env -> env
+  (** Overwriting variant of Modops.add_module_parameter, see above. *)
+
+  val overwrite_structure : ModPath.t -> structure_body -> Mod_subst.delta_resolver -> env -> env
+  (** Overwriting variant of Modops.add_structure, see above. *)
 
 end

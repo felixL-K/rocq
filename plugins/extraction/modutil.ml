@@ -35,18 +35,19 @@ let se_iter do_decl do_spec do_mp =
   let rec mt_iter = function
     | MTident mp -> do_mp mp
     | MTfunsig (_,mt,mt') -> mt_iter mt; mt_iter mt'
-    | MTwith (mt,ML_With_type(idl,l,t))->
+    | MTwith (mt, ML_With_type (rlv, idl, l, t))->
         let mp_mt = msid_of_mt mt in
         let l',idl' = List.sep_last idl in
         let mp_w =
-          List.fold_left (fun mp l -> MPdot(mp,Label.of_id l)) mp_mt idl'
+          List.fold_left (fun mp l -> MPdot(mp, l)) mp_mt idl'
         in
-        let r = GlobRef.ConstRef (Constant.make2 mp_w (Label.of_id l')) in
+        let r = GlobRef.ConstRef (Constant.make2 mp_w l') in
+        let r = { glob = r; inst = rlv } in
         mt_iter mt; do_spec (Stype(r,l,Some t))
     | MTwith (mt,ML_With_module(idl,mp))->
         let mp_mt = msid_of_mt mt in
         let mp_w =
-          List.fold_left (fun mp l -> MPdot(mp,Label.of_id l)) mp_mt idl
+          List.fold_left (fun mp l -> MPdot(mp, l)) mp_mt idl
         in
         mt_iter mt; do_mp mp_w; do_mp mp
     | MTsig (_, sign) -> List.iter spec_iter sign
@@ -75,7 +76,7 @@ let struct_iter do_decl do_spec do_mp s =
 (*s Apply some fonctions upon all references in [ml_type], [ml_ast],
   [ml_decl], [ml_spec] and [ml_structure]. *)
 
-type do_ref = GlobRef.t -> unit
+type do_ref = global -> unit
 
 let record_iter_references do_term = function
   | Record l -> List.iter (Option.iter do_term) l
@@ -111,32 +112,35 @@ let ast_iter_references do_term do_cons do_type a =
       | MLstring _ | MLparray _ -> ()
   in iter a
 
-let ind_iter_references do_term do_cons do_type kn ind =
+let ind_iter_references do_term do_cons do_type ind =
   let type_iter = type_iter_references do_type in
-  let cons_iter cp l = do_cons (GlobRef.ConstructRef cp); List.iter type_iter l in
-  let packet_iter ip p =
-    do_type (GlobRef.IndRef ip);
-    if lang () == Ocaml then
-      (match ind.ind_equiv with
-         | Miniml.Equiv kne -> do_type (GlobRef.IndRef (MutInd.make1 kne, snd ip));
-         | _ -> ());
-    Array.iteri (fun j -> cons_iter (ip,j+1)) p.ip_types
+  let cons_iter cp l = do_cons cp; List.iter type_iter l in
+  let packet_iter i p =
+    let () = do_type p.ip_typename_ref in
+    let () = if lang () == Ocaml then begin
+        let inst = ind.ind_packets.(0).ip_typename_ref.inst in
+        (match ind.ind_equiv with
+         | Miniml.Equiv kne -> do_type { glob = (GlobRef.IndRef (MutInd.make1 kne, i)); inst };
+         | _ -> ())
+      end
+    in
+    Array.iteri (fun j -> cons_iter p.ip_consnames_ref.(j)) p.ip_types
   in
-  if lang () == Ocaml then record_iter_references do_term ind.ind_kind;
-    Array.iteri (fun i -> packet_iter (kn,i)) ind.ind_packets
+  let () = if lang () == Ocaml then record_iter_references do_term ind.ind_kind in
+  Array.iteri (fun i p -> packet_iter i p) ind.ind_packets
 
 let decl_iter_references do_term do_cons do_type =
   let type_iter = type_iter_references do_type
   and ast_iter = ast_iter_references do_term do_cons do_type in
   function
-    | Dind (kn,ind) -> ind_iter_references do_term do_cons do_type kn ind
+    | Dind ind -> ind_iter_references do_term do_cons do_type ind
     | Dtype (r,_,t) -> do_type r; type_iter t
     | Dterm (r,a,t) -> do_term r; ast_iter a; type_iter t
     | Dfix(rv,c,t) ->
         Array.iter do_term rv; Array.iter ast_iter c; Array.iter type_iter t
 
 let spec_iter_references do_term do_cons do_type = function
-  | Sind (kn,ind) -> ind_iter_references do_term do_cons do_type kn ind
+  | Sind ind -> ind_iter_references do_term do_cons do_type ind
   | Stype (r,_,ot) -> do_type r; Option.iter (type_iter_references do_type) ot
   | Sval (r,t) -> do_term r; type_iter_references do_type t
 
@@ -162,7 +166,7 @@ let rec type_search f = function
   | u -> if f u then raise Found
 
 let decl_type_search f = function
-  | Dind (_,{ind_packets=p})  ->
+  | Dind {ind_packets = p}  ->
       Array.iter
         (fun {ip_types=v} -> Array.iter (List.iter (type_search f)) v) p
   | Dterm (_,_,u) -> type_search f u
@@ -170,7 +174,7 @@ let decl_type_search f = function
   | Dtype (_,_,u) -> type_search f u
 
 let spec_type_search f = function
-  | Sind (_,{ind_packets=p}) ->
+  | Sind {ind_packets = p} ->
       Array.iter
         (fun {ip_types=v} -> Array.iter (List.iter (type_search f)) v) p
   | Stype (_,_,ot) -> Option.iter (type_search f) ot
@@ -187,8 +191,8 @@ let struct_type_search f s =
 
 let rec msig_of_ms = function
   | [] -> []
-  | (l,SEdecl (Dind (kn,i))) :: ms ->
-      (l,Spec (Sind (kn,i))) :: (msig_of_ms ms)
+  | (l,SEdecl (Dind i)) :: ms ->
+      (l,Spec (Sind i)) :: (msig_of_ms ms)
   | (l,SEdecl (Dterm (r,_,t))) :: ms ->
       (l,Spec (Sval (r,t))) :: (msig_of_ms ms)
   | (l,SEdecl (Dtype (r,v,t))) :: ms ->
@@ -219,7 +223,7 @@ let is_modular = function
 
 let rec search_structure l m = function
   | [] -> raise Not_found
-  | (lab,d)::_ when Label.equal lab l && (is_modular d : bool) == m -> d
+  | (lab,d)::_ when Id.equal lab l && (is_modular d : bool) == m -> d
   | _::fields -> search_structure l m fields
 
 let get_decl_in_structure r struc =
@@ -261,11 +265,11 @@ let dfix_to_mlfix rv av i =
   let s = make_subst (Array.length rv - 1) Refmap'.empty
   in
   let rec subst n t = match t with
-    | MLglob ((GlobRef.ConstRef kn) as refe) ->
+    | MLglob refe ->
         (try MLrel (n + (Refmap'.find refe s)) with Not_found -> t)
     | _ -> ast_map_lift subst n t
   in
-  let ids = Array.map (fun r -> Label.to_id (label_of_r r)) rv in
+  let ids = Array.map label_of_r rv in
   let c = Array.map (subst 0) av
   in MLfix(i, ids, c)
 
@@ -312,25 +316,32 @@ and optim_me table to_appear s = function
    For non-library extraction, we recompute a minimal set of dependencies
    for first-level definitions (no module pruning yet). *)
 
-let base_r = let open GlobRef in function
-  | ConstRef c as r -> r
-  | IndRef (kn,_) -> IndRef (kn,0)
-  | ConstructRef ((kn,_),_) -> IndRef (kn,0)
+let base_r r = let open GlobRef in match r.glob with
+  | ConstRef _ -> r
+  | IndRef (kn,_) -> { glob = IndRef (kn, 0); inst = r.inst }
+  | ConstructRef ((kn,_),_) -> { glob = IndRef (kn, 0); inst = r.inst }
   | _ -> assert false
 
-let reset_needed, add_needed, add_needed_mp, found_needed, is_needed =
-  let needed = ref Refset'.empty
-  and needed_mps = ref MPset.empty in
-  ((fun () -> needed := Refset'.empty; needed_mps := MPset.empty),
-   (fun r -> needed := Refset'.add (base_r r) !needed),
-   (fun mp -> needed_mps := MPset.add mp !needed_mps),
-   (fun r -> needed := Refset'.remove (base_r r) !needed),
-   (fun r ->
-     let r = base_r r in
-     Refset'.mem r !needed || MPset.mem (modpath_of_r r) !needed_mps))
+type needed = {
+  needed_mp : ModPath.Set.t;
+  needed_rf : Refset'.t;
+}
+
+let add_needed nd r =
+  nd := { !nd with needed_rf = Refset'.add (base_r r) !nd.needed_rf }
+
+let add_needed_mp nd mp =
+  nd := { !nd with needed_mp = ModPath.Set.add mp !nd.needed_mp }
+
+let found_needed nd r =
+  nd := { !nd with needed_rf = Refset'.remove (base_r r) !nd.needed_rf }
+
+let is_needed nd r =
+  let r = base_r r in
+  Refset'.mem r nd.needed_rf || ModPath.Set.mem (modpath_of_r r) nd.needed_mp
 
 let declared_refs = function
-  | Dind (kn,_) -> [GlobRef.IndRef (kn,0)]
+  | Dind p -> [p.ind_packets.(0).ip_typename_ref]
   | Dtype (r,_,_) -> [r]
   | Dterm (r,_,_) -> [r]
   | Dfix (rv,_,_) -> Array.to_list rv
@@ -338,10 +349,12 @@ let declared_refs = function
 (* Computes the dependencies of a declaration, except in case
    of custom extraction. *)
 
-let compute_deps_decl = function
-  | Dind (kn,ind) ->
+let compute_deps_decl nd decl =
+  let add_needed r = add_needed nd r in
+  match decl with
+  | Dind ind ->
       (* Todo Later : avoid dependencies when Extract Inductive *)
-      ind_iter_references add_needed add_needed add_needed kn ind
+      ind_iter_references add_needed add_needed add_needed ind
   | Dtype (r,ids,t) ->
       if not (is_custom r) then type_iter_references add_needed t
   | Dterm (r,u,t) ->
@@ -351,44 +364,51 @@ let compute_deps_decl = function
   | Dfix _ as d ->
       decl_iter_references add_needed add_needed add_needed d
 
-let compute_deps_spec = function
-  | Sind (kn,ind) ->
+let compute_deps_spec nd spc =
+  let add_needed r = add_needed nd r in
+  match spc with
+  | Sind ind ->
       (* Todo Later : avoid dependencies when Extract Inductive *)
-      ind_iter_references add_needed add_needed add_needed kn ind
+      ind_iter_references add_needed add_needed add_needed ind
   | Stype (r,ids,t) ->
       if not (is_custom r) then Option.iter (type_iter_references add_needed) t
   | Sval (r,t) ->
       type_iter_references add_needed t
 
-let rec depcheck_se table = function
+let rec depcheck_se table nd = function
   | [] -> []
   | ((l,SEdecl d) as t) :: se ->
-    let se' = depcheck_se table se in
+    let se' = depcheck_se table nd se in
     let refs = declared_refs d in
-    let refs' = List.filter is_needed refs in
+    let refs' = List.filter (fun r -> is_needed !nd r) refs in
     if List.is_empty refs' then
       (List.iter (fun r -> remove_info_axiom table r) refs;
        List.iter (fun r -> remove_opaque table r) refs;
        se')
-    else begin
-      List.iter found_needed refs';
+    else
+      let () = List.iter (fun r -> found_needed nd r) refs' in
       (* Hack to avoid extracting unused part of a Dfix *)
-      match d with
+      begin match d with
         | Dfix (rv,trms,tys) when (List.for_all is_custom refs') ->
           let trms' =  Array.make (Array.length rv) (MLexn "UNUSED") in
           ((l,SEdecl (Dfix (rv,trms',tys))) :: se')
-        | _ -> (compute_deps_decl d; t::se')
-    end
+        | _ ->
+          let () = compute_deps_decl nd d in
+          t :: se'
+      end
   | t :: se ->
-    let se' = depcheck_se table se in
-    se_iter compute_deps_decl compute_deps_spec add_needed_mp t;
+    let se' = depcheck_se table nd se in
+    let iter_decl d = compute_deps_decl nd d in
+    let iter_spec s = compute_deps_spec nd s in
+    let iter_mp mp = add_needed_mp nd mp in
+    let () = se_iter iter_decl iter_spec iter_mp t in
     t :: se'
 
-let rec depcheck_struct table = function
+let rec depcheck_struct table nd = function
   | [] -> []
   | (mp,lse)::struc ->
-      let struc' = depcheck_struct table struc in
-      let lse' = depcheck_se table lse in
+      let struc' = depcheck_struct table nd struc in
+      let lse' = depcheck_se table nd lse in
       if List.is_empty lse' then struc' else (mp,lse')::struc'
 
 exception RemainingImplicit of kill_reason
@@ -404,19 +424,17 @@ let check_for_remaining_implicits struc =
 let optimize_struct table to_appear struc =
   let subst = ref (Refmap'.empty : ml_ast Refmap'.t) in
   let opt_struc =
-    List.map (fun (mp,lse) -> (mp, optim_se table true (fst to_appear) subst lse))
+    List.map (fun (mp,lse) -> (mp, optim_se (Common.State.get_table table) true (fst to_appear) subst lse))
       struc
   in
   let mini_struc =
-    if library () then
+    if Common.State.get_library table then
       List.filter (fun (_,lse) -> not (List.is_empty lse)) opt_struc
     else
-      begin
-        reset_needed ();
-        List.iter add_needed (fst to_appear);
-        List.iter add_needed_mp (snd to_appear);
-        depcheck_struct table opt_struc
-      end
+      let nd = ref { needed_mp = ModPath.Set.empty; needed_rf = Refset'.empty } in
+      let () = List.iter (fun r -> add_needed nd r) (fst to_appear) in
+      let () = List.iter (fun mp -> add_needed_mp nd mp) (snd to_appear) in
+      depcheck_struct (Common.State.get_table table) nd opt_struc
   in
   let () = check_for_remaining_implicits mini_struc in
   mini_struc

@@ -4,10 +4,15 @@
 Proof mode
 ----------
 
+The Rocq Prover is a proof assistant (or interactive theorem prover), which allows
+users to interactively construct proofs through a dialog with the assistant.  The assistant
+ensures the validity of each step of the proof.  :term:`Tactics <tactic>`, which represent
+steps in the proof of a theorem, are the building blocks for this dialog.
+
 :gdef:`Proof mode <proof mode>` is used to prove theorems.
 Rocq enters proof mode when you begin a proof,
 such as with the :cmd:`Theorem` command.  It exits proof mode when
-you complete a proof, such as with the :cmd:`Qed` command.  Tactics,
+you complete a proof, such as with the :cmd:`Qed` command.  :term:`Tactics <tactic>`,
 which are available only in proof mode, incrementally transform incomplete
 proofs to eventually generate a complete proof.
 
@@ -103,7 +108,7 @@ The real proof, whether complete or incomplete, is the associated term,
 the :gdef:`proof term`, which users may occasionally want to examine.
 (This is based on the
 *Curry-Howard isomorphism* :cite:`How80,Bar81,Gir89,H89`, which is
-a correspondence between between proofs and terms and between
+a correspondence between proofs and terms and between
 :term:`propositions <proposition>` and types of λ-calculus.  The isomorphism
 is also sometimes called the "propositions-as-types correspondence".)
 
@@ -279,8 +284,8 @@ When the proof is completed, you can exit proof mode with commands such as
    .. prodn::
       section_var_expr ::= {* @starred_ident_ref }
       | {? - } @section_var_expr50
-      section_var_expr50 ::= @section_var_expr0 - @section_var_expr0
-      | @section_var_expr0 + @section_var_expr0
+      section_var_expr50 ::= @section_var_expr50 - @section_var_expr0
+      | @section_var_expr50 + @section_var_expr0
       | @section_var_expr0
       section_var_expr0 ::= @starred_ident_ref
       | ()
@@ -373,8 +378,8 @@ When the proof is completed, you can exit proof mode with commands such as
       variables declared with :cmd:`Proof using` are added to the theorem as
       additional variables.  You can see the effect on the theorem's statement
       with commands such as :cmd:`Check`, :cmd:`Print` and :cmd:`About` after the
-      section is closed.  Currently there is no command that shows the section variables
-      associated with a theorem before the section is closed.
+      section is closed.  The :cmd:`Print` and :cmd:`About` commands also show the
+      section variables associated with a theorem before the section is closed.
 
       Adding the unnecessary section variable `radixNotZero` changes how `foo'` can be
       applied.
@@ -432,6 +437,17 @@ The following options modify the behavior of ``Proof using``.
    When this :term:`flag` is on, :cmd:`Qed` suggests
    a ``using`` annotation if the user did not provide one.
 
+.. flag:: Keep Admitted Variables
+
+   When on, proofs terminated with :cmd:`Admitted` use the section
+   variables from `Proof using` if one was provided (including through
+   `Default Proof Using`), otherwise the variables used in the partial
+   proof (including any variables visible from the still open goals).
+
+   When off, only the section variables used in the type are used.
+
+   On by default.
+
 ..  _`nameaset`:
 
 Name a set of section hypotheses for ``Proof using``
@@ -471,6 +487,7 @@ Name a set of section hypotheses for ``Proof using``
       are deprecated. See the warnings below and in the :cmd:`Proof using` command.
 
    .. exn:: "All" is a predefined collection containing all variables. It can't be redefined.
+      :name: All is a predefined collection containing all variables. It can't be redefined.
 
       When issuing a :cmd:`Proof using` command, **All** used as a collection name always means
       "use all variables".
@@ -572,8 +589,8 @@ Curly braces
    :name: {; }
 
    .. todo
-      See https://github.com/coq/coq/issues/12004 and
-      https://github.com/coq/coq/issues/12825.
+      See https://github.com/rocq-prover/rocq/issues/12004 and
+      https://github.com/rocq-prover/rocq/issues/12825.
 
    ``{`` (without a terminating period) focuses on the first
    goal.  The subproof can only be
@@ -885,7 +902,7 @@ Proving a subgoal as a separate lemma: abstract
    .. warning::
 
       The abstract tactic, while very useful, still has some known
-      limitations.  See `#9146 <https://github.com/coq/coq/issues/9146>`_ for more
+      limitations.  See `#9146 <https://github.com/rocq-prover/rocq/issues/9146>`_ for more
       details. We recommend caution when using it in some
       "non-standard" contexts. In particular, ``abstract`` doesn't
       work properly when used inside quotations ``ltac:(...)``.
